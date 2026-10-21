@@ -78,14 +78,14 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/labstack/echo/v4 v4.13.3 // indirect
-	github.com/labstack/gommon v0.4.2 // indirect
+	github.com/labstack/echo/v4 v4.15.3 // indirect
+	github.com/labstack/gommon v0.5.0 // indirect
 	github.com/leaanthony/go-ansi-parser v1.6.1 // indirect
 	github.com/leaanthony/gosod v1.0.4 // indirect
 	github.com/leaanthony/slicer v1.6.0 // indirect
 	github.com/leaanthony/u v1.1.1 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
