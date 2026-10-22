@@ -179,7 +179,7 @@
     return {
       vpn: vpnChanged,
       downloads: diff('downloadDir', 'downLimitKB', 'upLimitKB', 'scanDownloads', 'autoVerify'),
-      app: diff('closeToTray', 'autoUpdateCheck') || (!!startup && !startup.viaWindowsSettings && startupOn !== startup.enabled),
+      app: diff('closeToTray', 'autoUpdateCheck', 'updateChannel') || (!!startup && !startup.viaWindowsSettings && startupOn !== startup.enabled),
     }
   })
 
@@ -409,6 +409,19 @@
                 <input type="checkbox" bind:checked={s.autoUpdateCheck} />
                 <span>Check for updates automatically <span class="muted">(when it starts and about once a day, through the VPN)</span></span>
               </label>
+              <label class="row">
+                <span class="lbl">Update channel</span>
+                <select bind:value={s.updateChannel}>
+                  <option value="stable">Stable</option>
+                  <option value="beta">Beta</option>
+                </select>
+              </label>
+              <p class="muted small">
+                <b>Beta</b> also offers previews of the next version, so you get fixes and new features sooner and can
+                help find problems before a release. Betas are signed and checked like releases, but have had less
+                testing. Switching back to <b>Stable</b> doesn't undo a beta: you stay on it until the next release
+                is newer. Save, then check for updates to see the change.
+              </p>
               {/if}
               {#if about.links.sponsor}
                 <div class="row">

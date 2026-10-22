@@ -31,6 +31,10 @@ func TestNewerVersion(t *testing.T) {
 		{"0.3.0-rc9", "0.3.0-rc10", false},
 		{"0.3.0-rc1", "0.2.18", true},
 		{"0.2.18", "0.3.0-rc1", false},
+		{"0.2.41-beta.10", "0.2.41-beta.9", true},
+		{"0.2.41-beta.2", "0.2.41-beta.1", true},
+		{"0.2.41", "0.2.41-beta.3", true},
+		{"0.2.41-beta.1", "0.2.40", true},
 	}
 	for _, c := range cases {
 		if got := newerVersion(c.a, c.b); got != c.want {
@@ -137,5 +141,21 @@ func TestCleanUpdateTempOnlyRecordedFile(t *testing.T) {
 	a.markDownload(fresh, false)
 	if _, err := os.Stat(a.updateDownloadMarker()); !os.IsNotExist(err) {
 		t.Error("the marker wasn't removed once nothing was left in it")
+	}
+}
+
+func TestNewestPrereleaseIn(t *testing.T) {
+	feed := `<feed>
+<entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.41"/></entry>
+<entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.41-beta.10"/></entry>
+<entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.41-beta.9"/></entry>
+<entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.42-beta.1;rm"/></entry>
+<entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.40"/></entry>
+</feed>`
+	if got := newestPrereleaseIn([]byte(feed)); got != "0.2.41-beta.10" {
+		t.Errorf("got %q", got)
+	}
+	if got := newestPrereleaseIn([]byte(`<feed><link href="https://github.com/x/releases/tag/v0.2.40"/></feed>`)); got != "" {
+		t.Errorf("no pre-release: got %q", got)
 	}
 }

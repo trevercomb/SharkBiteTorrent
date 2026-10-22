@@ -513,6 +513,7 @@ export namespace main {
 	    autoUpdateCheck: boolean;
 	    skippedVersion: string;
 	    lastUpdateCheck: number;
+	    updateChannel: string;
 	    scanDownloads: boolean;
 	    autoVerify: string;
 	    remoteEnabled: boolean;
@@ -536,6 +537,7 @@ export namespace main {
 	        this.autoUpdateCheck = source["autoUpdateCheck"];
 	        this.skippedVersion = source["skippedVersion"];
 	        this.lastUpdateCheck = source["lastUpdateCheck"];
+	        this.updateChannel = source["updateChannel"];
 	        this.scanDownloads = source["scanDownloads"];
 	        this.autoVerify = source["autoVerify"];
 	        this.remoteEnabled = source["remoteEnabled"];

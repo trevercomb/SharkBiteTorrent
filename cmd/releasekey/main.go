@@ -291,10 +291,14 @@ func publish(tag string) error {
 	}
 	// The Microsoft Store package, checked the same way before anything is
 	// published. It isn't part of the GitHub release (Partner Center signs
-	// it), so it comes from the release workflow run's artifacts.
-	msix, err := storePackage(dir, tag, commit)
-	if err != nil {
-		return fmt.Errorf("not publishing %s: Store package: %w", tag, err)
+	// it), so it comes from the release workflow run's artifacts. Betas
+	// (v0.3.0-beta.1) have none: the Store gets releases only.
+	beta := strings.Contains(tag, "-")
+	var msix string
+	if !beta {
+		if msix, err = storePackage(dir, tag, commit); err != nil {
+			return fmt.Errorf("not publishing %s: Store package: %w", tag, err)
+		}
 	}
 	fmt.Printf("Signing %s for %s:\n%s", sumsAsset, tag, sums)
 	sig := minisign.SignWithComments(k, sums, fmt.Sprintf(commentForm, tag), "signed with the Shark BiteTorrent release key")
@@ -311,13 +315,17 @@ func publish(tag string) error {
 	// A pre-release (v0.3.0-rc1) mustn't become "latest": the app's update
 	// check follows /releases/latest.
 	flags := []string{"release", "edit", tag, "--repo", repo, "--draft=false", "--latest"}
-	if strings.Contains(tag, "-") {
+	if beta {
 		flags = []string{"release", "edit", tag, "--repo", repo, "--draft=false", "--prerelease", "--latest=false"}
 	}
 	if err := gh(flags...); err != nil {
 		return err
 	}
 	fmt.Printf("Published %s with a signed %s.\n", tag, sumsAsset)
+	if beta {
+		fmt.Println("A beta: published as a pre-release, offered only to apps on the beta update channel. Nothing for the Store.")
+		return nil
+	}
 
 	home, _ := os.UserHomeDir()
 	dst := filepath.Join(home, "Downloads", filepath.Base(msix))

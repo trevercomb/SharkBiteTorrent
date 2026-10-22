@@ -23,7 +23,7 @@ Changes go to `main` as they're made (each user-visible one noted under **Unrele
 ## Shipping
 
 ```sh
-# bump wails.json productVersion and packaging/arch/PKGBUILD pkgver, commit
+# bump wails.json productVersion and packaging/arch/PKGBUILD _version, commit
 git tag -a vX.Y.Z -m "Shark BiteTorrent X.Y.Z" && git push origin vX.Y.Z
 # wait for the Release workflow (creates a draft), then on the maintainer's computer:
 git checkout vX.Y.Z                     # publish refuses anything but a clean checkout of the tag
@@ -34,6 +34,21 @@ git checkout main
 Check the draft's release notes before publishing.
 
 `publish` also downloads the Microsoft Store package (`.msix`) from that release run, checks its build provenance the same way (nothing is published if it fails), and puts it in your Downloads folder. Upload that file in Partner Center: the app → **Packages** → drag it in → **Submit**. (Store API automation isn't available on individual developer accounts; and keeping the upload on the maintainer's computer means a hijacked GitHub account can't push a Store update either.)
+
+## Betas
+
+A beta (`vX.Y.Z-beta.N`, the version of the next release) ships what's committed on `main` to people on the **Beta** update channel, without waiting for a release. It's tagged, built and signed exactly like a release, with lighter checks:
+
+1. Checks and CodeQL green on the commit; the **Unreleased** section of `CHANGELOG.md` says what's new (it becomes the beta's notes, so don't rename it).
+2. The engine leak test if networking, the VPN or the updater changed; an audit (the Audit workflow is enough) if the beta touches anything in step 4's list.
+3. Tag and publish as in Shipping, without bumping any version (the workflow takes it from the tag):
+   ```sh
+   git tag -a vX.Y.Z-beta.N -m "Shark BiteTorrent X.Y.Z beta N" && git push origin vX.Y.Z-beta.N
+   git checkout vX.Y.Z-beta.N && go run ./cmd/releasekey publish vX.Y.Z-beta.N && git checkout main
+   ```
+   It's published as a pre-release, so `/releases/latest` (what Stable checks) doesn't move. There's no Store package for a beta.
+
+The app on the Beta channel finds betas through the releases feed (`/releases.atom`, the newest 10 releases), so a beta older than the 10 newest releases isn't offered. That's fine: a newer beta or release always is.
 
 ## Audit brief
 

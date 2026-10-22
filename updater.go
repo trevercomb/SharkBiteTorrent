@@ -39,6 +39,10 @@ const (
 	// every 20 hours while the app runs (it may run for weeks).
 	autoCheckAtStart = time.Hour
 	autoCheckPeriod  = 20 * time.Hour
+
+	// Settings.UpdateChannel
+	channelStable = "stable"
+	channelBeta   = "beta"
 )
 
 type UpdateInfo struct {
@@ -119,12 +123,53 @@ func (a *App) checkUpdate(ctx context.Context, allowDirect bool) (UpdateInfo, er
 	if !strings.HasPrefix(tag, "v") || !versionPattern.MatchString(info.Latest) {
 		return info, fmt.Errorf("unexpected release tag %q", tag)
 	}
+	// The beta channel also looks at pre-releases (v0.3.0-beta.1), which
+	// /latest never points to. They're installed only with the same signature
+	// check as releases.
+	if a.betaChannel() {
+		if pre := newestPrerelease(ctx, hc); pre != "" && newerVersion(pre, info.Latest) {
+			info.Latest = pre
+			tag = "v" + pre
+		}
+	}
 	info.NotesURL = releasesURL + "/tag/" + tag
 	info.Available = newerVersion(info.Latest, info.Current)
 	if info.Available {
 		info.Notes = updateNotes(ctx, hc, info.Current, info.Latest)
 	}
 	return info, nil
+}
+
+func (a *App) betaChannel() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.settings.UpdateChannel == channelBeta
+}
+
+// releaseTagRe finds release tags in GitHub's releases feed (the newest 10
+// releases, pre-releases included; drafts aren't in it).
+var releaseTagRe = regexp.MustCompile(`/releases/tag/v([^"<>/\s]+)"`)
+
+// newestPrerelease returns the newest pre-release version in the releases
+// feed, or "" if there's none or the feed can't be read. The feed is a web
+// page, not the REST API, so it isn't held to the API's per-IP limit.
+func newestPrerelease(ctx context.Context, hc *http.Client) string {
+	feed, err := fetchSmall(ctx, hc, releasesURL+".atom")
+	if err != nil {
+		return ""
+	}
+	return newestPrereleaseIn(feed)
+}
+
+func newestPrereleaseIn(feed []byte) string {
+	var newest string
+	for _, m := range releaseTagRe.FindAllSubmatch(feed, -1) {
+		v := string(m[1])
+		if strings.Contains(v, "-") && versionPattern.MatchString(v) && (newest == "" || newerVersion(v, newest)) {
+			newest = v
+		}
+	}
+	return newest
 }
 
 // newerVersion reports whether a > b for dotted numeric versions ("0.2.10" > "0.2.9").

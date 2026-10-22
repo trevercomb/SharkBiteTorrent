@@ -64,7 +64,7 @@ func updateAsset(version, exe string) string {
 		return "SharkBiteTorrent-macos-universal.zip"
 	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64":
 		if exe == "/usr/bin/sharkbitetorrent" {
-			return "sharkbitetorrent-" + version + "-1-x86_64.pkg.tar.zst"
+			return "sharkbitetorrent-" + strings.ReplaceAll(version, "-", "") + "-1-x86_64.pkg.tar.zst" // see PKGBUILD
 		}
 		return "SharkBiteTorrent-" + version + "-linux-x86_64.tar.gz"
 	}

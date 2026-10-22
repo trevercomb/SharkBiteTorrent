@@ -33,18 +33,25 @@ type NoteGroup struct {
 var headingRe = regexp.MustCompile(`^## \[([^\]]+)\](?: - (\S+))?`)
 
 // parseChangelog reads the released versions from CHANGELOG.md, newest
-// first. The Unreleased section is skipped.
-func parseChangelog(md []byte) []ReleaseNote {
+// first. The Unreleased section is skipped, unless unreleased names the
+// pre-release it belongs to: a beta (0.3.0-beta.1) is built from what's
+// committed, so its notes are the Unreleased section at its tag.
+func parseChangelog(md []byte, unreleased string) []ReleaseNote {
 	var out []ReleaseNote
 	var cur *ReleaseNote
 	var group *NoteGroup
 	for _, line := range strings.Split(strings.ReplaceAll(string(md), "\r\n", "\n"), "\n") {
 		if m := headingRe.FindStringSubmatch(line); m != nil {
 			cur, group = nil, nil
-			if !strings.EqualFold(m[1], "Unreleased") {
+			switch {
+			case !strings.EqualFold(m[1], "Unreleased"):
 				out = append(out, ReleaseNote{Version: m[1], Date: m[2]})
-				cur = &out[len(out)-1]
+			case unreleased != "":
+				out = append(out, ReleaseNote{Version: unreleased})
+			default:
+				continue
 			}
+			cur = &out[len(out)-1]
 			continue
 		}
 		if cur == nil {
@@ -101,7 +108,7 @@ func updateNotes(ctx context.Context, hc *http.Client, current, latest string) [
 	if err != nil {
 		return nil
 	}
-	return notesBetween(parseChangelog(md), current, latest)
+	return notesBetween(parseChangelog(md, prereleaseOf(latest)), current, latest)
 }
 
 // --- Bound to the frontend ---
@@ -110,10 +117,18 @@ func updateNotes(ctx context.Context, hc *http.Client, current, latest string) [
 // built into the app), for "What's new" in Settings → About.
 func (a *App) GetReleaseNotes() []ReleaseNote {
 	v := a.currentVersion()
-	for _, n := range parseChangelog(changelogMD) {
+	for _, n := range parseChangelog(changelogMD, prereleaseOf(v)) {
 		if n.Version == v {
 			return []ReleaseNote{n}
 		}
 	}
 	return nil
+}
+
+// prereleaseOf returns v if it's a pre-release version, else "".
+func prereleaseOf(v string) string {
+	if strings.Contains(v, "-") {
+		return v
+	}
+	return ""
 }

@@ -1,7 +1,10 @@
 # Packages the prebuilt Linux release tarball (built by .github/workflows/release.yml).
 # Put the release tarball next to this file, then: makepkg -si
 pkgname=sharkbitetorrent
-pkgver=0.2.40
+# The app's version; a beta (0.3.0-beta.1) becomes pkgver 0.3.0beta.1, since
+# pacman versions can't contain "-" (and sort 0.3.0beta.1 before 0.3.0).
+_version=0.2.40
+pkgver=${_version//-/}
 pkgrel=1
 pkgdesc="Lightweight BitTorrent client with a built-in per-app VPN (WARP/WireGuard)"
 arch=('x86_64')
@@ -12,13 +15,13 @@ optdepends=(
   'kwallet: stores the encryption key for saved VPN logins (KDE)'
   'gnome-keyring: stores the encryption key for saved VPN logins (GNOME and others)'
 )
-source=("SharkBiteTorrent-${pkgver}-linux-x86_64.tar.gz")
+source=("SharkBiteTorrent-${_version}-linux-x86_64.tar.gz")
 sha256sums=('SKIP')
 # The binary is already stripped, so skip makepkg's empty -debug split package.
 options=('!debug')
 
 package() {
-  cd "SharkBiteTorrent-${pkgver}-linux-x86_64"
+  cd "SharkBiteTorrent-${_version}-linux-x86_64"
   install -Dm755 SharkBiteTorrent "${pkgdir}/usr/bin/sharkbitetorrent"
   install -Dm644 sharkbitetorrent.desktop "${pkgdir}/usr/share/applications/sharkbitetorrent.desktop"
   install -Dm644 sharkbitetorrent.png "${pkgdir}/usr/share/pixmaps/sharkbitetorrent.png"

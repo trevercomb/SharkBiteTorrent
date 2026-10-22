@@ -116,6 +116,9 @@ type Settings struct {
 	AutoUpdateCheck bool   `json:"autoUpdateCheck"`
 	SkippedVersion  string `json:"skippedVersion"`
 	LastUpdateCheck int64  `json:"lastUpdateCheck"` // unix seconds
+	// UpdateChannel: "stable" (default) or "beta", which also offers
+	// pre-releases (v0.3.0-beta.1). Not used by the Store version.
+	UpdateChannel string `json:"updateChannel"`
 	// ScanDownloads scans finished torrents with the system antivirus.
 	ScanDownloads bool `json:"scanDownloads"`
 	// AutoVerify: re-check a finished torrent's files against its piece
@@ -1427,6 +1430,9 @@ func (a *App) SaveSettings(s Settings) error {
 	if s.ForwardedPort < 0 || s.ForwardedPort > 65535 {
 		return errors.New("forwarded port must be between 0 and 65535")
 	}
+	if s.UpdateChannel != channelBeta {
+		s.UpdateChannel = channelStable
+	}
 	if s.DownLimitKB < 0 || s.UpLimitKB < 0 {
 		return errors.New("speed limits can't be negative")
 	}
@@ -1554,6 +1560,7 @@ func (a *App) loadSettings() {
 		VpnProvider:     "warp",
 		CloseToTray:     true,
 		AutoUpdateCheck: true,
+		UpdateChannel:   channelStable,
 		ScanDownloads:   true,
 		AutoVerify:      "suspect",
 	}

@@ -92,7 +92,7 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           sed -i "s/\"productVersion\": \"[^\"]*\"/\"productVersion\": \"$v\"/" wails.json
-          sed -i "s/^pkgver=.*/pkgver=$v/" packaging/arch/PKGBUILD
+          sed -i "s/^_version=.*/_version=$v/" packaging/arch/PKGBUILD
       - name: Build
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
@@ -104,7 +104,7 @@ jobs:
           go version -m build/bin/SharkBiteTorrent | grep -q 'x509usefallbackroots=1' || { echo "x509usefallbackroots=1 isn't in the built program"; exit 1; }
       - name: Package tarball
         run: |
-          v=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+          v=$(sed -n 's/^_version=//p' packaging/arch/PKGBUILD)
           name="SharkBiteTorrent-${v}-linux-x86_64"
           mkdir -p "dist/$name"
           cp build/bin/SharkBiteTorrent packaging/linux/sharkbitetorrent.desktop LICENSE THIRD_PARTY_LICENSES.txt "dist/$name/"
@@ -150,7 +150,9 @@ jobs:
     # Microsoft Store package. Not part of the GitHub release: it's unsigned
     # until Partner Center signs it. releasekey publish checks its build
     # provenance (below) and puts it in the maintainer's Downloads folder for
-    # uploading to Partner Center.
+    # uploading to Partner Center. Not for betas (v0.3.0-beta.1): the Store
+    # gets releases only, and its versions must be plain numbers.
+    if: ${{ !(startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-')) }}
     runs-on: windows-2025
     # bash everywhere: PowerShell doesn't stop when a command fails, so a
     # multi-command step only failed if its LAST command did (Windows test
@@ -312,12 +314,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${GITHUB_REF_NAME#v}"
-          awk -v h="## [$v]" 'index($0, h) == 1 { f = 1; next } f && /^## \[/ { exit } f' src/CHANGELOG.md > section.md
+          # A beta's notes are the Unreleased section (what's been committed
+          # since the last release); the app shows them the same way.
+          h="## [$v]"
+          case "$v" in *-*) h="## [Unreleased]";; esac
+          awk -v h="$h" 'index($0, h) == 1 { f = 1; next } f && /^## \[/ { exit } f' src/CHANGELOG.md > section.md
           if ! grep -q '[^[:space:]]' section.md; then
-            echo "::error::CHANGELOG.md has no section for $v; add '## [$v] - date' with what changed."
+            echo "::error::CHANGELOG.md has no notes under '$h'; add what changed."
             exit 1
           fi
-          { echo "## What's new"; cat section.md; echo; cat src/packaging/release-notes-footer.md; } > notes.md
+          {
+            case "$v" in *-*) printf '%s\n\n' "**Beta:** a preview of the next release, for testing. Apps on the beta update channel (Settings → App) are offered it; everyone else stays on the latest release.";; esac
+            echo "## What's new"; cat section.md; echo; cat src/packaging/release-notes-footer.md
+          } > notes.md
           cat notes.md
           # A draft: the maintainer signs SHA256SUMS.txt on their own computer
           # (go run ./cmd/releasekey publish <tag>), which also publishes it.
