@@ -5,6 +5,7 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 ## [Unreleased]
 
 ### Added
+- **Settings in tabs:** VPN, Downloads (folder, speed limits, malware scan and auto verify), Search, Remote and App (sign-in start, tray, magnet links, updates, about). A dot marks tabs with unsaved changes, and Settings opens on the tab you last used. Search and Remote apply changes at once, as before, and now say so.
 - **Auto verify** (Settings → Desktop): before the malware scan, a finished download's files are re-checked against the torrent if something could have damaged them: its drive disconnected, a read or write failed, or the app didn't shut down normally while it was downloading. Damaged pieces are downloaded again, and the complete, verified files are scanned. The files panel says why it was verified. It can also verify every download, or be turned off; verifying everything reads each download back from the drive once more, which is slow for large files on a network drive, so it's not the default.
 - After **Verify files** finds damaged pieces, the files are scanned for malware again once they've been downloaded again (the scan may have seen the damaged data).
 
