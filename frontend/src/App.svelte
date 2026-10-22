@@ -231,7 +231,7 @@
   }
 
   const stateLabel: Record<string, string> = {
-    metadata: 'Fetching metadata', 'needs-torrent-file': '⚠ Needs .torrent file', blocked: '⚠ Stopped', downloading: 'Downloading', seeding: 'Seeding', paused: 'Paused',
+    metadata: 'Fetching metadata', 'needs-torrent-file': '⚠ Needs .torrent file', blocked: '⚠ Stopped', downloading: 'Downloading', checking: 'Checking', seeding: 'Seeding', paused: 'Paused',
   }
 
   const limitText = $derived.by(() => {
