@@ -62,8 +62,8 @@ type fileStore struct {
 	// onMarkFailed: set by the engine, called when a finished piece couldn't
 	// be saved (see markFailed).
 	onMarkFailed func(idx int)
-	ft      *fileTorrent  // the torrent's storage, once opened
-	removed bool          // being removed: don't write out buffered pieces on close
+	ft           *fileTorrent // the torrent's storage, once opened
+	removed      bool         // being removed: don't write out buffered pieces on close
 }
 
 // dropping tells the store its torrent is being removed, before it's closed.
@@ -152,7 +152,10 @@ func (s *fileStore) checkGone() bool {
 		s.gone = err
 	}
 	s.mu.Unlock()
-	s.markSuspect("its drive was disconnected")
+	// Over any earlier reason: a write that failed as the drive dropped is
+	// recorded first, but "disconnected" says what happened.
+	why := "its drive was disconnected"
+	s.suspect.Store(&why)
 	return true
 }
 

@@ -100,10 +100,20 @@ func TestSuspect(t *testing.T) {
 	if st.Suspect() != "" {
 		t.Fatal("suspect from the start")
 	}
-	st.markSuspect("its drive was disconnected")
 	st.markSuspect("reading or writing its files failed")
-	if got := st.Suspect(); got != "its drive was disconnected" {
+	st.markSuspect("its files couldn't be read")
+	if got := st.Suspect(); got != "reading or writing its files failed" {
 		t.Errorf("reason %q, want the first one", got)
+	}
+	// The drive dropping says more than the failed write it caused.
+	if err := os.RemoveAll(st.dir); err != nil {
+		t.Fatal(err)
+	}
+	if !st.checkGone() {
+		t.Fatal("folder removed but not gone")
+	}
+	if got := st.Suspect(); got != "its drive was disconnected" {
+		t.Errorf("reason %q after the drive went away", got)
 	}
 	st.ClearSuspect()
 	if st.Suspect() != "" {
