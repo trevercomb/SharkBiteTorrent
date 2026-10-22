@@ -489,7 +489,7 @@
   .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
   .check { display: flex; align-items: flex-start; gap: 10px; margin-top: 8px; cursor: pointer; }
   .check input { margin-top: 3px; }
-  .lbl { width: 72px; }
+  .lbl { min-width: 72px; white-space: nowrap; }
   .short { width: 100px; }
   .grow { flex: 1; min-width: 0; }
   .muted { color: var(--muted); }
