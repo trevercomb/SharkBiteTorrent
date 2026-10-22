@@ -1078,6 +1078,12 @@ func (e *Engine) List() []Status {
 			row.State = "needs-torrent-file"
 		case t.Info() == nil:
 			row.State = "metadata"
+		case row.Done >= row.Size && piecesBeingChecked(t):
+			// Every byte is there, but some pieces are still queued for
+			// their hash check (after a restart, many are): not finished
+			// yet, so no malware scan or automatic Verify starts on files
+			// that aren't confirmed.
+			row.State = "checking"
 		case row.Done >= row.Size:
 			row.State = "seeding"
 		default:
@@ -1346,4 +1352,15 @@ func (e *Engine) VerifyAuto(ctx context.Context, hash, reason string) (*VerifyRe
 		e.mu.Unlock()
 	}
 	return res, nil
+}
+
+// piecesBeingChecked reports whether any of t's pieces is queued for, or in,
+// its hash check.
+func piecesBeingChecked(t *torrent.Torrent) bool {
+	for _, r := range t.PieceStateRuns() {
+		if r.Checking || r.Hashing || r.QueuedForHash || r.Marking {
+			return true
+		}
+	}
+	return false
 }
