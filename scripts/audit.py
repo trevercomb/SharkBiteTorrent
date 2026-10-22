@@ -35,7 +35,7 @@ def git(*args):
 def audit_brief():
     # The brief lives in RELEASING.md so local and API audits ask the same thing.
     text = open("RELEASING.md", encoding="utf-8").read()
-    m = re.search(r"## Audit brief\s*\n\s*> (.+?)\n", text)
+    m = re.search(r"## Audit brief\n.*?^> (.+?)$", text, re.S | re.M)
     if not m:
         sys.exit("RELEASING.md has no '## Audit brief' quote")
     return m.group(1)
