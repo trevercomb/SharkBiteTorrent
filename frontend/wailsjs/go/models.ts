@@ -60,6 +60,7 @@ export namespace engine {
 	    badFiles: string[];
 	    at: number;
 	    reason: string;
+	    unreadable: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new VerifyResult(source);
@@ -72,6 +73,7 @@ export namespace engine {
 	        this.badFiles = source["badFiles"];
 	        this.at = source["at"];
 	        this.reason = source["reason"];
+	        this.unreadable = source["unreadable"];
 	    }
 	}
 	export class Status {
