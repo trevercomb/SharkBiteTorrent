@@ -52,7 +52,13 @@ func (a *App) onTrayReady() {
 	}()
 
 	go func() {
-		for range time.Tick(2 * time.Second) {
+		// NewTicker, not time.Tick: Tick's ticker is never collected.
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for range tick.C {
+			if a.isShuttingDown() {
+				return
+			}
 			systray.SetTooltip(a.trayTooltip())
 		}
 	}()

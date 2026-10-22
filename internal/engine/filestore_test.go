@@ -53,12 +53,14 @@ func TestTorrentPathsRejectsUnsafeNames(t *testing.T) {
 	}
 }
 
-// writePiece writes and completes piece 0 through the store, which creates
-// the torrent's first file.
+// writePiece writes piece 0 in full and marks it complete. Completing a
+// piece syncs every file it covers (see filePiece.syncData), so a one-byte
+// write left the other files missing and MarkComplete failed.
 func writePiece(t *testing.T, impl storage.TorrentImpl, info *metainfo.Info) error {
 	t.Helper()
-	pc := impl.Piece(info.Piece(0))
-	if _, err := pc.WriteAt([]byte("x"), 0); err != nil {
+	piece := info.Piece(0)
+	pc := impl.Piece(piece)
+	if _, err := pc.WriteAt(bytes.Repeat([]byte("x"), int(piece.Length())), 0); err != nil {
 		return err
 	}
 	return pc.MarkComplete()
@@ -650,7 +652,7 @@ func TestAllMissingNotTidied(t *testing.T) {
 	}
 	os.Remove(dir)
 	os.Rename(filepath.Join(base, "drive"), dir)
-	if o := loadOwnership(owned, hashN(23), dir, true); len(o.files()) != 1 {
+	if o := loadOwnership(owned, hashN(23), dir, true); len(o.files()) != 2 {
 		t.Errorf("own files not recognised when the drive is back: %v", o.files())
 	}
 }
@@ -743,7 +745,7 @@ func TestLegacyAllMissingWaits(t *testing.T) {
 	if st.unavailableNow() != nil {
 		t.Fatal("still waiting with the files back")
 	}
-	if err := st.reclaim(); err != nil || len(st.files()) != 1 {
+	if err := st.reclaim(); err != nil || len(st.files()) != 2 {
 		t.Fatalf("reclaim: %v, files %v", err, st.files())
 	}
 	if recordedMount(rec) == "" {

@@ -392,7 +392,11 @@ func (a *App) stopRemote() {
 // watchRemoteNetwork follows network changes: leaving the home network
 // pauses the server, coming back (or a new local address) restarts it.
 func (a *App) watchRemoteNetwork() {
-	for range time.Tick(recheckNetwork) {
+	// NewTicker, not time.Tick: Tick's ticker is never collected, and this
+	// loop returns when the app shuts down.
+	tick := time.NewTicker(recheckNetwork)
+	defer tick.Stop()
+	for range tick.C {
 		if a.isShuttingDown() {
 			return
 		}

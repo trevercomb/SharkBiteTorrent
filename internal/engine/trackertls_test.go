@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -45,6 +46,8 @@ func TestTrackerTLSVerified(t *testing.T) {
 	// One whose certificate isn't trusted never receives the request.
 	var reached bool
 	bad := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	// The client is meant to reject this certificate; don't log the handshake.
+	bad.Config.ErrorLog = log.New(io.Discard, "", 0)
 	other, err := bridgeCert() // any certificate the pool doesn't trust
 	if err != nil {
 		t.Fatal(err)
