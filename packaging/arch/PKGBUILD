@@ -1,7 +1,7 @@
 # Packages the prebuilt Linux release tarball (built by .github/workflows/release.yml).
 # Put the release tarball next to this file, then: makepkg -si
 pkgname=sharkbitetorrent
-pkgver=0.2.39
+pkgver=0.2.40
 pkgrel=1
 pkgdesc="Lightweight BitTorrent client with a built-in per-app VPN (WARP/WireGuard)"
 arch=('x86_64')

@@ -12,7 +12,7 @@
   },
   "info": {
     "productName": "Shark BiteTorrent",
-    "productVersion": "0.2.39",
+    "productVersion": "0.2.40",
     "copyright": "Copyright (C) 2026 Shark BiteTorrent contributors. Licensed under GPL-3.0-or-later.",
     "comments": "BitTorrent client with a built-in per-app VPN",
     "fileAssociations": [

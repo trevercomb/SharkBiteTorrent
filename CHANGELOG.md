@@ -2,7 +2,7 @@
 
 What changed in each release of Shark BiteTorrent. The release notes on GitHub are taken from this file, so every release's section should say what users will notice.
 
-## [Unreleased]
+## [0.2.40] - 2026-10-22
 
 ### Added
 - **Settings in tabs:** VPN, Downloads (folder, speed limits, malware scan and auto verify), Search, Remote and App (sign-in start, tray, magnet links, updates, about). A dot marks tabs with unsaved changes, and Settings opens on the tab you last used. Search and Remote apply changes at once, as before, and now say so.
