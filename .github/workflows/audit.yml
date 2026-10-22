@@ -1,0 +1,43 @@
+# Fresh-eyes audit by Claude through the Anthropic API (scripts/audit.py),
+# paid from the API credits rather than interactive Claude usage. Manual
+# only: Actions → Audit → Run workflow. The report is attached to the run as
+# the "audit-report" artifact. Needs the ANTHROPIC_API_KEY repository secret;
+# keep auto-reload off on that Console account so a run can never cost more
+# than the credits left.
+name: Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: Extra instructions for this audit (optional)
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the diff starts at the last v* tag
+      - name: Install the Anthropic SDK
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check anthropic==2.1.0
+      - name: Audit
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FOCUS: ${{ inputs.focus }} # passed via env so it is never run as shell
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/audit.py --focus "$FOCUS"'
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: audit-report
+          path: report.md
+          if-no-files-found: ignore
