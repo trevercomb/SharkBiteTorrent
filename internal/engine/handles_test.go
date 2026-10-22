@@ -108,3 +108,40 @@ func TestSuspect(t *testing.T) {
 		t.Error("still suspect after ClearSuspect")
 	}
 }
+
+// A piece whose check failed because its data couldn't be read keeps its
+// "finished" record and isn't counted as damaged; a real mismatch is both.
+func TestUnreadablePieceKeepsRecord(t *testing.T) {
+	info := &metainfo.Info{Name: "f.bin", PieceLength: 16 << 10, Length: 32 << 10, Pieces: make([]byte, 40)}
+	pc := storage.NewMapPieceCompletion()
+	st := newFileStore(t.TempDir(), pc, "", false)
+	impl, err := st.OpenTorrent(t.Context(), info, hashN(7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer impl.Close()
+	key := func(i int) metainfo.PieceKey { return metainfo.PieceKey{InfoHash: hashN(7), Index: i} }
+	pc.Set(key(0), true)
+	pc.Set(key(1), true)
+
+	stop := st.startFailLog()
+	st.ft.mu.Lock()
+	st.ft.readFailed = map[int]bool{0: true} // piece 0: the read failed
+	st.ft.mu.Unlock()
+	impl.Piece(info.Piece(0)).MarkNotComplete()
+	impl.Piece(info.Piece(1)).MarkNotComplete() // piece 1: really damaged
+	bad := stop()
+
+	if c, _ := pc.Get(key(0)); !c.Complete {
+		t.Error("an unreadable piece lost its record")
+	}
+	if c, _ := pc.Get(key(1)); c.Complete {
+		t.Error("a damaged piece kept its record")
+	}
+	if len(bad) != 1 || bad[0] != 1 {
+		t.Errorf("counted as damaged: %v, want [1]", bad)
+	}
+	if st.Suspect() == "" {
+		t.Error("an unreadable piece didn't make the torrent suspect")
+	}
+}

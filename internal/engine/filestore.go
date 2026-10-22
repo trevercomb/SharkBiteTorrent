@@ -352,6 +352,10 @@ type fileTorrent struct {
 	// failLog, while Verify runs, collects the pieces that failed their
 	// check (see MarkNotComplete); nil otherwise.
 	failLog map[int]bool
+	// readFailed: pieces whose data couldn't be read (an error, not a
+	// mismatch) since their last check. Their check fails too, but they
+	// aren't damaged: MarkNotComplete keeps their record.
+	readFailed map[int]bool
 }
 
 // pieceBuf holds a piece's blocks until it's complete. have marks which
@@ -789,6 +793,14 @@ func (p *filePiece) ReadAt(b []byte, off int64) (int, error) {
 	p.t.mu.Unlock()
 
 	n, err := p.diskIO(b, off, false, (*os.File).ReadAt)
+	if err != nil && !errors.Is(err, io.EOF) {
+		p.t.mu.Lock()
+		if p.t.readFailed == nil {
+			p.t.readFailed = map[int]bool{}
+		}
+		p.t.readFailed[p.p.Index()] = true
+		p.t.mu.Unlock()
+	}
 	if buf != nil {
 		p.t.mu.Lock()
 		if cur := p.t.bufs[p.p.Index()]; cur == buf {
@@ -952,6 +964,16 @@ func (p *filePiece) MarkComplete() error {
 func (p *filePiece) MarkNotComplete() error {
 	idx := p.p.Index()
 	p.t.mu.Lock()
+	if p.t.readFailed[idx] {
+		// Its check failed because the data couldn't be read (the drive
+		// refused access, say, right after the app was killed: a NAS keeps
+		// the old handle open for a while), not because it's damaged. Its
+		// record stays; the library re-downloads it this session.
+		delete(p.t.readFailed, idx)
+		p.t.mu.Unlock()
+		p.t.store.markSuspect("its files couldn't be read")
+		return nil
+	}
 	if p.t.failLog != nil {
 		p.t.failLog[idx] = true
 	}

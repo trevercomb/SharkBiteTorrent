@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"net"
 	"os"
@@ -1154,6 +1155,22 @@ func (e *Engine) Verify(ctx context.Context, hash string) (*VerifyResult, error)
 	}
 	if err := en.storage.Unavailable(); err != nil {
 		return nil, err // every piece would read as damaged
+	}
+	// A file that can't be opened (a NAS refuses access for a while to a
+	// file the app had open when it was killed) would make every piece in
+	// it fail: try again later instead. A missing file is checked: its
+	// pieces really are gone.
+	if paths, err := torrentPaths(en.dir, t.Info()); err == nil {
+		for _, p := range paths {
+			f, err := os.Open(p)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("its files can't be read right now (%w); try again in a minute", err)
+			}
+			f.Close()
+		}
 	}
 	if !en.verifying.CompareAndSwap(false, true) {
 		return nil, errors.New("already verifying")

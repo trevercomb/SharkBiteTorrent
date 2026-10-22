@@ -60,6 +60,11 @@ func main() {
 		OnShutdown:        app.shutdown,
 		OnBeforeClose:     app.beforeClose,
 		HideWindowOnClose: hideOnClose,
+		// The browser's right-click menu (Cut, Copy, Paste) in text boxes and
+		// on selected text only: Wails' "auto" rule hides it everywhere else,
+		// and the torrent list has its own menu. Without it, pasting a magnet
+		// link or a password took Ctrl+V.
+		EnableDefaultContextMenu: true,
 		// A second launch (e.g. clicking a magnet link while running) hands
 		// its arguments to this instance instead of starting another.
 		SingleInstanceLock: &options.SingleInstanceLock{
