@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
 	"net"
 	"os"
@@ -218,6 +217,18 @@ func New(tun *tunnel.Tunnel, opts Options) (*Engine, error) {
 // library's own announcer only runs when something wakes it, and a torrent
 // could sit at 0 peers indefinitely: one restored at start from a magnet
 // link with no trackers stayed at "Fetching metadata" until Pause/Resume.
+// wantsData reports whether the torrent is missing data of a file the user
+// wants (skipped files don't count: a torrent done with what's wanted isn't
+// looking for peers).
+func wantsData(t *torrent.Torrent) bool {
+	for _, f := range t.Files() {
+		if f.Priority() != torrent.PiecePriorityNone && f.BytesCompleted() < f.Length() {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Engine) peerWatchdog() {
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
@@ -237,7 +248,7 @@ func (e *Engine) peerWatchdog() {
 		e.mu.Unlock()
 		for _, en := range idle {
 			t := en.t
-			if t.Stats().ActivePeers > 0 || t.Info() != nil && t.BytesMissing() == 0 {
+			if t.Stats().ActivePeers > 0 || t.Info() != nil && !wantsData(t) {
 				continue
 			}
 			e.findPeers(en)
@@ -290,6 +301,7 @@ func newDirect(opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("torrent client: %w", err)
 	}
 	e.cl = cl
+	go e.peerWatchdog() // as in VPN mode (findPeers uses the library's DHT here)
 	return e, nil
 }
 
@@ -440,6 +452,12 @@ func (e *Engine) Add(o AddOptions) (string, error) {
 		e.mu.Unlock()
 		return "", err
 	}
+	// A finished piece that couldn't be saved still counts as finished for
+	// the library (it ignores MarkComplete's error): re-checked from the
+	// drive, so it's dropped and downloaded again if it isn't there.
+	st.mu.Lock()
+	st.onMarkFailed = func(idx int) { go t.Piece(idx).VerifyData() }
+	st.mu.Unlock()
 	// Writing failed: the library would quietly stop downloading. Its drive
 	// going away waits for it; anything else (a full disk, a file that
 	// isn't ours) pauses it with the reason.
@@ -606,13 +624,20 @@ func (e *Engine) resumeLocked(en *entry) {
 // again, after Verify found damaged ones or its drive came back, was never
 // woken: it sat at 0 peers until the app restarted.
 func (e *Engine) findPeers(en *entry) {
-	if e.dht == nil || en.t == nil || !en.findingPeers.CompareAndSwap(false, true) {
+	// The tunnel's DHT; with No VPN, the library's own.
+	var ds torrent.DhtServer
+	if e.dht != nil {
+		ds = torrent.AnacrolixDhtServerWrapper{Server: e.dht}
+	} else if servers := e.cl.DhtServers(); len(servers) > 0 {
+		ds = servers[0]
+	}
+	if ds == nil || en.t == nil || !en.findingPeers.CompareAndSwap(false, true) {
 		return // one lookup at a time per torrent
 	}
-	t, ds := en.t, e.dht
+	t := en.t
 	go func() {
 		defer en.findingPeers.Store(false)
-		done, stop, err := t.AnnounceToDht(torrent.AnacrolixDhtServerWrapper{Server: ds})
+		done, stop, err := t.AnnounceToDht(ds)
 		if err != nil {
 			return
 		}
@@ -976,6 +1001,9 @@ type VerifyResult struct {
 	At       int64    `json:"at"`       // unix seconds
 	// Reason: why it was verified automatically ("" if the user asked).
 	Reason string `json:"reason"`
+	// Unreadable: pieces whose data couldn't be read (not damaged, not
+	// verified either: checked again later).
+	Unreadable int `json:"unreadable"`
 }
 
 // SFVStatus is the result of checking the torrent's own .sfv file(s).
@@ -1109,6 +1137,7 @@ const metadataStallAfter = 45 * time.Second
 // this they would be downloaded again. It runs before priorities are applied,
 // so nothing is re-requested while checking. Finished files are skipped.
 func recheck(en *entry) {
+	en.storage.clearReadFailed()
 	t := en.t
 	var pieces []int
 	for _, f := range t.Files() {
@@ -1160,12 +1189,17 @@ func (e *Engine) Verify(ctx context.Context, hash string) (*VerifyResult, error)
 	// file the app had open when it was killed) would make every piece in
 	// it fail: try again later instead. A missing file is checked: its
 	// pieces really are gone.
+	if err := en.storage.Blocked(); err != nil {
+		return nil, err // its paths are taken by files that aren't its own
+	}
 	if paths, err := torrentPaths(en.dir, t.Info()); err == nil {
 		for _, p := range paths {
-			f, err := os.Open(p)
-			if errors.Is(err, fs.ErrNotExist) {
+			// Only regular files: opening a FIFO someone left at the path
+			// would wait forever.
+			if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
 				continue
 			}
+			f, err := os.Open(p)
 			if err != nil {
 				return nil, fmt.Errorf("its files can't be read right now (%w); try again in a minute", err)
 			}
@@ -1234,16 +1268,26 @@ func (e *Engine) Verify(ctx context.Context, hash string) (*VerifyResult, error)
 	for _, i := range pieces {
 		verifying[i] = true
 	}
-	for _, i := range stopLog() {
+	failed, unreadable := stopLog()
+	for _, i := range failed {
 		if verifying[i] { // not a piece that just failed while downloading
 			bad = append(bad, i)
 		}
 	}
-	if len(bad) > 0 {
+	unread := 0
+	for _, i := range unreadable {
+		if verifying[i] {
+			unread++
+		}
+	}
+	e.mu.Lock()
+	running := !en.paused && !en.held && !en.stopped && !en.waiting
+	e.mu.Unlock()
+	if (len(bad) > 0 || unread > 0) && running {
 		e.findPeers(en) // it needs pieces again: find someone to get them from
 	}
 
-	res := &VerifyResult{Pieces: len(pieces), Bad: len(bad), BadFiles: []string{}, At: time.Now().Unix()}
+	res := &VerifyResult{Pieces: len(pieces), Bad: len(bad), Unreadable: unread, BadFiles: []string{}, At: time.Now().Unix()}
 	for _, f := range t.Files() {
 		for _, p := range bad {
 			if p >= f.BeginPieceIndex() && p < f.EndPieceIndex() {
@@ -1355,6 +1399,10 @@ func (e *Engine) VerifyAuto(ctx context.Context, hash, reason string) (*VerifyRe
 	res, err := e.Verify(ctx, hash)
 	if err != nil {
 		return nil, err
+	}
+	if res.Unreadable > 0 {
+		// Not verified: tried again later, still suspect meanwhile.
+		return nil, fmt.Errorf("%d pieces couldn't be read", res.Unreadable)
 	}
 	en, err := e.find(hash)
 	if err == nil {

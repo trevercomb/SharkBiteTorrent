@@ -59,6 +59,9 @@ type fileStore struct {
 	gone    error         // the download folder isn't available (its drive is disconnected); see reclaim
 	ih      metainfo.Hash // the torrent's, once it's being opened
 	mount   string        // the mount point its record noted (see folderAway)
+	// onMarkFailed: set by the engine, called when a finished piece couldn't
+	// be saved (see markFailed).
+	onMarkFailed func(idx int)
 	ft      *fileTorrent  // the torrent's storage, once opened
 	removed bool          // being removed: don't write out buffered pieces on close
 }
@@ -274,7 +277,8 @@ func (s *fileStore) OpenTorrent(_ context.Context, info *metainfo.Info, ih metai
 		handles: map[int]*handlePool{},
 		bufs:    map[int]*pieceBuf{},
 		busy:    map[int]int{},
-		stale:   map[int]int{},
+		lent:    map[*os.File]bool{},
+		stale:   map[*os.File]bool{},
 	}
 	paths, err := torrentPaths(s.dir, info)
 	if err == nil {
@@ -345,17 +349,25 @@ type fileTorrent struct {
 	inUse         int         // handles handed out and not yet released, plus MarkCompletes running
 	closeTimedOut bool        // close stopped waiting for inUse
 	busy          map[int]int // handles in use, by file index
-	// stale counts handles in use that were opened before the download
-	// folder went away and came back (dropHandles): closed, not reused,
-	// when they're released.
-	stale map[int]int
+	// lent are the handles in use; stale, those of them opened before the
+	// download folder went away and came back (dropHandles): closed, not
+	// reused, when they're released. By handle: a fresh one opened since
+	// mustn't be taken for an old one.
+	lent  map[*os.File]bool
+	stale map[*os.File]bool
 	// failLog, while Verify runs, collects the pieces that failed their
 	// check (see MarkNotComplete); nil otherwise.
 	failLog map[int]bool
 	// readFailed: pieces whose data couldn't be read (an error, not a
 	// mismatch) since their last check. Their check fails too, but they
-	// aren't damaged: MarkNotComplete keeps their record.
+	// aren't damaged: MarkNotComplete keeps their record. Cleared when the
+	// piece is completed and when a check starts (see startFailLog), so an
+	// old failure (serving a peer while the drive was away) can't excuse a
+	// piece that's really damaged.
 	readFailed map[int]bool
+	// unreadLog, while Verify runs, collects the pieces that couldn't be
+	// read (not counted as damaged, and not verified either).
+	unreadLog map[int]bool
 }
 
 // pieceBuf holds a piece's blocks until it's complete. have marks which
@@ -405,6 +417,7 @@ func (t *fileTorrent) acquire(i int, create bool) (*os.File, error) {
 			pool.idle = pool.idle[:n-1]
 			t.inUse++
 			t.busy[i]++
+			t.lent[f] = true
 			return f, nil
 		}
 		if pool.open < handlesPerFile {
@@ -418,6 +431,7 @@ func (t *fileTorrent) acquire(i int, create bool) (*os.File, error) {
 			pool.open++
 			t.inUse++
 			t.busy[i]++
+			t.lent[f] = true
 			return f, nil
 		}
 		t.freed.Wait()
@@ -440,14 +454,15 @@ func (t *fileTorrent) giveBack(i int, f *os.File, bad bool) {
 	if t.busy[i]--; t.busy[i] <= 0 {
 		delete(t.busy, i)
 	}
+	delete(t.lent, f)
+	if t.stale[f] {
+		delete(t.stale, f)
+		bad = true
+	}
 	if t.closed {
 		f.Close()
 		t.freed.Broadcast() // waitReleased
 		return
-	}
-	if t.stale[i] > 0 {
-		t.stale[i]--
-		bad = true
 	}
 	if bad {
 		t.store.markSuspect("reading or writing its files failed")
@@ -466,13 +481,15 @@ func (t *fileTorrent) giveBack(i int, f *os.File, bad bool) {
 func (t *fileTorrent) dropHandles() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for i, pool := range t.handles {
+	for _, pool := range t.handles {
 		for _, f := range pool.idle {
 			f.Close()
 			pool.open--
 		}
 		pool.idle = nil
-		t.stale[i] = t.busy[i]
+	}
+	for f := range t.lent {
+		t.stale[f] = true
 	}
 	t.freed.Broadcast()
 }
@@ -943,11 +960,13 @@ func (p *filePiece) MarkComplete() error {
 	p.t.mu.Unlock()
 	if buf != nil {
 		if err := p.flushAt(idx, buf); err != nil {
-			return err // not marked complete; the library will retry the piece
+			p.t.store.markFailed(idx)
+			return err
 		}
 	}
 	if err := p.syncData(); err != nil {
-		return err // not on the drive for sure: not marked complete
+		p.t.store.markFailed(idx)
+		return err // not on the drive for sure: not recorded
 	}
 	p.t.store.mu.Lock()
 	removed := p.t.store.removed
@@ -958,6 +977,9 @@ func (p *filePiece) MarkComplete() error {
 		// waits for this, so quitting doesn't lose finished pieces.)
 		return errors.New("torrent storage closed")
 	}
+	p.t.mu.Lock()
+	delete(p.t.readFailed, idx)
+	p.t.mu.Unlock()
 	return p.t.pc.Set(p.key(), true)
 }
 
@@ -970,6 +992,9 @@ func (p *filePiece) MarkNotComplete() error {
 		// the old handle open for a while), not because it's damaged. Its
 		// record stays; the library re-downloads it this session.
 		delete(p.t.readFailed, idx)
+		if p.t.unreadLog != nil {
+			p.t.unreadLog[idx] = true
+		}
 		p.t.mu.Unlock()
 		p.t.store.markSuspect("its files couldn't be read")
 		return nil
@@ -1046,25 +1071,55 @@ func overlay(buf *pieceBuf, b []byte, off int64) {
 
 // startFailLog begins collecting the pieces that fail their check; the
 // returned func stops and returns them, sorted.
-func (s *fileStore) startFailLog() func() []int {
+func (s *fileStore) startFailLog() func() (bad, unreadable []int) {
 	s.mu.Lock()
 	t := s.ft
 	s.mu.Unlock()
 	if t == nil {
-		return func() []int { return nil }
+		return func() ([]int, []int) { return nil, nil }
 	}
 	t.mu.Lock()
-	t.failLog = map[int]bool{}
+	t.failLog, t.unreadLog = map[int]bool{}, map[int]bool{}
+	t.readFailed = nil // only this check's read errors count
 	t.mu.Unlock()
-	return func() []int {
+	return func() ([]int, []int) {
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		out := make([]int, 0, len(t.failLog))
-		for i := range t.failLog {
-			out = append(out, i)
+		keys := func(m map[int]bool) []int {
+			out := make([]int, 0, len(m))
+			for i := range m {
+				out = append(out, i)
+			}
+			slices.Sort(out)
+			return out
 		}
-		t.failLog = nil
-		slices.Sort(out)
-		return out
+		bad, unreadable := keys(t.failLog), keys(t.unreadLog)
+		t.failLog, t.unreadLog = nil, nil
+		return bad, unreadable
+	}
+}
+
+// clearReadFailed forgets old read errors before the library re-checks
+// pieces (see readFailed).
+func (s *fileStore) clearReadFailed() {
+	s.mu.Lock()
+	t := s.ft
+	s.mu.Unlock()
+	if t != nil {
+		t.mu.Lock()
+		t.readFailed = nil
+		t.mu.Unlock()
+	}
+}
+
+// markFailed reports a piece whose data couldn't be saved: the library
+// counts it finished anyway (it ignores MarkComplete's error), so the
+// engine has it checked again (see onMarkFailed).
+func (s *fileStore) markFailed(idx int) {
+	s.mu.Lock()
+	f := s.onMarkFailed
+	s.mu.Unlock()
+	if f != nil {
+		f(idx)
 	}
 }

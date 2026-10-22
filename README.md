@@ -288,6 +288,10 @@ The signing key never goes into git or GitHub Actions; a compromised GitHub acco
 
 Running the **Release** workflow by hand from the Actions tab builds everything without publishing. Each run also builds the Microsoft Store `.msix` (with build provenance) as an artifact; it isn't attached to the release, because it's only installable after the Store signs it. `releasekey publish` verifies it and hands it over for upload to Partner Center.
 
+### Diagnostic logging
+
+Starting the app with `SBT_LOG_LEVEL=info` (or `debug`) writes the torrent engine's log to standard error, for diagnosing download problems. Passkeys in tracker addresses and magnet links are redacted, but the log does include file paths, torrent names and hashes, and peers' IP addresses, so look through it before sharing it. It's off unless you set the variable.
+
 ## Project layout
 
 ```

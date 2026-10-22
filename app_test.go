@@ -198,3 +198,25 @@ func TestAutoVerifyMode(t *testing.T) {
 		}
 	}
 }
+
+// Only one copy holds the instance lock; a second launch (on Linux, Wails
+// runs its startup before handing it to the running copy) neither marks the
+// torrent list nor removes the running copy's marker when it exits.
+func TestSecondInstanceLeavesStateAlone(t *testing.T) {
+	dir := t.TempDir()
+	first := &App{configDir: dir}
+	if !first.lockInstance() {
+		t.Fatal("first copy didn't get the lock")
+	}
+	defer first.instanceLock.Close()
+	os.WriteFile(first.runningMarker(), nil, 0o600)
+	second := &App{configDir: dir}
+	if second.lockInstance() {
+		t.Fatal("second copy got the lock too")
+	}
+	second.secondary = true
+	second.stopAllNow(t.Context())
+	if _, err := os.Stat(first.runningMarker()); err != nil {
+		t.Error("the second copy removed the running copy's marker")
+	}
+}

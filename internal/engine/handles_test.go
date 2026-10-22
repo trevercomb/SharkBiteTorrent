@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/anacrolix/torrent/metainfo"
@@ -83,10 +85,10 @@ func TestFailLog(t *testing.T) {
 	stop := st.startFailLog()
 	impl.Piece(info.Piece(1)).MarkNotComplete()
 	impl.Piece(info.Piece(0)).MarkNotComplete()
-	if got := stop(); len(got) != 2 || got[0] != 0 || got[1] != 1 {
+	if got, _ := stop(); len(got) != 2 || got[0] != 0 || got[1] != 1 {
 		t.Errorf("failed pieces %v, want [0 1]", got)
 	}
-	if got := stop(); len(got) != 0 {
+	if got, _ := stop(); len(got) != 0 {
 		t.Errorf("second stop returned %v", got)
 	}
 }
@@ -130,10 +132,13 @@ func TestUnreadablePieceKeepsRecord(t *testing.T) {
 	st.ft.mu.Unlock()
 	impl.Piece(info.Piece(0)).MarkNotComplete()
 	impl.Piece(info.Piece(1)).MarkNotComplete() // piece 1: really damaged
-	bad := stop()
+	bad, unread := stop()
 
 	if c, _ := pc.Get(key(0)); !c.Complete {
 		t.Error("an unreadable piece lost its record")
+	}
+	if len(unread) != 1 || unread[0] != 0 {
+		t.Errorf("unreadable pieces %v, want [0]", unread)
 	}
 	if c, _ := pc.Get(key(1)); c.Complete {
 		t.Error("a damaged piece kept its record")
@@ -143,5 +148,56 @@ func TestUnreadablePieceKeepsRecord(t *testing.T) {
 	}
 	if st.Suspect() == "" {
 		t.Error("an unreadable piece didn't make the torrent suspect")
+	}
+}
+
+// An old read error (serving a peer while the drive was away, say) doesn't
+// excuse a piece that a later check finds really damaged.
+func TestOldReadErrorDoesNotHideDamage(t *testing.T) {
+	dir := t.TempDir()
+	info := &metainfo.Info{Name: "f.bin", PieceLength: 16 << 10, Length: 32 << 10, Pieces: make([]byte, 40)}
+	pc := storage.NewMapPieceCompletion()
+	st := newFileStore(dir, pc, "", false)
+	impl, err := st.OpenTorrent(t.Context(), info, hashN(26))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer impl.Close()
+	p := filepath.Join(dir, "f.bin")
+	key := metainfo.PieceKey{InfoHash: hashN(26), Index: 0}
+	f, _ := st.ft.acquire(0, true)
+	st.ft.release(0, f)
+	st.ft.dropHandles()
+	pc.Set(key, true)
+	os.Remove(p)
+	os.Mkdir(p, 0o755) // a read fails once
+	b := make([]byte, 16<<10)
+	impl.Piece(info.Piece(0)).ReadAt(b, 0)
+	os.Remove(p)
+	os.WriteFile(p, make([]byte, 32<<10), 0o644)
+
+	stop := st.startFailLog() // a check: the piece really doesn't match
+	impl.Piece(info.Piece(0)).MarkNotComplete()
+	bad, unread := stop()
+	if c, _ := pc.Get(key); c.Complete || len(bad) != 1 || len(unread) != 0 {
+		t.Errorf("damaged piece: record complete %v, counted bad %v, unreadable %v", c.Complete, bad, unread)
+	}
+}
+
+// After a reconnect, the handle opened before it is the one closed when
+// given back, not a fresh one opened since.
+func TestStaleHandleIsTheOldOne(t *testing.T) {
+	info := &metainfo.Info{Name: "f.bin", PieceLength: 16 << 10, Length: 32 << 10, Pieces: make([]byte, 40)}
+	st := newFileStore(t.TempDir(), storage.NewMapPieceCompletion(), "", false)
+	impl, _ := st.OpenTorrent(t.Context(), info, hashN(27))
+	defer impl.Close()
+	ft := st.ft
+	old, _ := ft.acquire(0, true) // opened before the drive went away
+	st.reclaim()
+	fresh, _ := ft.acquire(0, true) // opened after it came back
+	ft.release(0, fresh)
+	ft.release(0, old)
+	if idle := ft.handles[0].idle; len(idle) != 1 || idle[0] != fresh {
+		t.Errorf("idle handles %v: want only the fresh one %p (old %p)", idle, fresh, old)
 	}
 }

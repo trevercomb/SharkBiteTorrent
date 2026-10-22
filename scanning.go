@@ -511,8 +511,34 @@ func (a *App) autoVerify(ctx context.Context, eng *engine.Engine, t engine.Statu
 		return true
 	}
 	res, err := eng.VerifyAuto(ctx, t.Hash, reason)
+	if err != nil && ctx.Err() == nil {
+		// Tried again next time (about every 10 s). One that keeps failing
+		// (a file another program holds, a permission problem) mustn't hold
+		// back the scan forever without a word: after about a minute it's
+		// scanned anyway, and the user is told.
+		a.mu.Lock()
+		if a.verifyFails == nil {
+			a.verifyFails = map[string]int{}
+		}
+		a.verifyFails[t.Hash]++
+		giveUp := a.verifyFails[t.Hash] >= 6
+		if giveUp {
+			if a.autoVerified == nil {
+				a.autoVerified = map[string]bool{}
+			}
+			a.autoVerified[t.Hash] = true
+		}
+		a.mu.Unlock()
+		if !giveUp {
+			return false
+		}
+		runtime.EventsEmit(a.ctx, "notice", fmt.Sprintf(
+			"“%s”: couldn't be verified %s (%v), so it was scanned for malware without that check. You can verify it yourself later.",
+			t.Name, reason, err))
+		return true
+	}
 	if err != nil {
-		return false // quitting, reconnecting or busy: tried again next time
+		return false // quitting: tried again next time
 	}
 	a.mu.Lock()
 	if a.autoVerified == nil {

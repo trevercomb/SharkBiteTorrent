@@ -38,8 +38,15 @@ type App struct {
 	ctx       context.Context
 	configDir string
 	exe       string
-	markerMu  sync.Mutex // the update-download marker (updater.go)
-	stopOnce  sync.Once  // stopAll
+	// instanceLock is held by the running copy for its whole life
+	// (lockInstance). secondary: another copy holds it. On Linux, Wails runs
+	// startup before handing a second launch (a magnet link) to the running
+	// copy; that copy mustn't load, mark or save the torrent list, nor
+	// remove the running copy's marker when it exits.
+	instanceLock *os.File
+	secondary    bool
+	markerMu     sync.Mutex // the update-download marker (updater.go)
+	stopOnce     sync.Once  // stopAll
 	// installing: an update is being installed (InstallUpdate); a second
 	// one at the same time (a double click) is refused.
 	installing atomic.Bool
@@ -57,6 +64,7 @@ type App struct {
 	// autoVerified: torrents verified automatically this session, so "all
 	// downloads" doesn't re-read one again after its repair.
 	autoVerified map[string]bool
+	verifyFails  map[string]int          // auto-verify attempts that failed, by hash (see autoVerify); guarded by mu
 	work         map[string]*torrentWork // background work reading a torrent's files (see workCtx)
 	removing     map[string]bool         // torrents being removed; kept across engine restarts
 	proxy        *socks.Server           // local SOCKS5 proxy into the tunnel, for Prowlarr/Jackett
@@ -169,6 +177,16 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if !a.lockInstance() {
+		a.secondary = true
+		// Wails hands the launch to the running copy and exits; if it can't
+		// (no D-Bus), this copy goes too rather than run beside it.
+		go func() {
+			time.Sleep(15 * time.Second)
+			runtime.Quit(ctx)
+		}()
+		return
+	}
 	a.loadSettings()
 	a.loadSaved()
 	a.noteUncleanExit()
@@ -217,6 +235,9 @@ func (a *App) stopAll(ctx context.Context) {
 }
 
 func (a *App) stopAllNow(ctx context.Context) {
+	if a.secondary {
+		return // nothing of its own was started (see startup)
+	}
 	a.mu.Lock()
 	a.shuttingDown = true // a Reconnect in progress must not start anything new
 	a.mu.Unlock()
@@ -247,7 +268,7 @@ func (a *App) noteUncleanExit() {
 	if _, err := os.Stat(a.runningMarker()); err == nil {
 		a.mu.Lock()
 		for i := range a.saved {
-			if s := &a.saved[i]; s.Scan == nil && s.Suspect == "" && !s.Confirm {
+			if s := &a.saved[i]; s.Scan == nil && s.Suspect == "" && !s.Confirm && !s.Paused {
 				s.Suspect = "the app didn't shut down normally while it was downloading"
 			}
 		}
