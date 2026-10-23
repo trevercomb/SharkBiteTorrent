@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
@@ -55,9 +57,18 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour:  &options.RGBA{R: 24, G: 26, B: 31, A: 1},
-		StartHidden:       autostart,
-		OnStartup:         app.startup,
+		BackgroundColour: &options.RGBA{R: 24, G: 26, B: 31, A: 1},
+		// macOS has no tray to bring back a window that was never shown, and
+		// a Dock click only unhides a hidden app (Wails v2 has no reopen
+		// hook), so there a sign-in start shows the window and hides the app
+		// at once, as the close button does.
+		StartHidden: autostart && !hideOnClose,
+		OnStartup: func(ctx context.Context) {
+			if autostart && hideOnClose {
+				runtime.Hide(ctx)
+			}
+			app.startup(ctx)
+		},
 		OnShutdown:        app.shutdown,
 		OnBeforeClose:     app.beforeClose,
 		HideWindowOnClose: hideOnClose,
