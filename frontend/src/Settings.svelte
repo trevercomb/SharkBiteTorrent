@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import InstallCommand from './InstallCommand.svelte'
   import {
     GetSettings, SaveSettings, ChooseDirectory,
     RegisterAssociations, OpenDefaultAppsSettings, GetAbout, OpenURL,
@@ -392,8 +393,7 @@
                 <div class="notes-box"><ReleaseNotes notes={updateResult.notes} /></div>
               {/if}
               {#if downloaded}
-                <p class="ok small">✓ Downloaded and checked against the release signature: {downloaded.path}</p>
-                <p class="small">{downloaded.hint}</p>
+                <InstallCommand path={downloaded.path} hint={downloaded.hint} command={downloaded.command} />
               {/if}
               {#if askDirect}
                 <div class="row">

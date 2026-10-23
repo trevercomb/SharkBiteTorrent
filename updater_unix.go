@@ -74,10 +74,19 @@ func updateAsset(version, exe string) string {
 func installHint(path string) string {
 	switch {
 	case strings.HasSuffix(path, ".pkg.tar.zst"):
-		// Single-quoted for pasting into a shell, ' itself escaped.
-		return "Install it with: sudo pacman -U '" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+		return "To install it, run this in a terminal (it asks for your password), then restart Shark BiteTorrent:"
 	case strings.HasSuffix(path, ".zip"):
 		return "Open it and drag Shark BiteTorrent into Applications, replacing the old copy."
 	}
 	return "Extract it and replace your SharkBiteTorrent file with the new one."
+}
+
+// installCommand is the command that installs the downloaded file, for the
+// window to show with a Copy button ("" if it isn't installed by a command).
+func installCommand(path string) string {
+	if strings.HasSuffix(path, ".pkg.tar.zst") {
+		// Single-quoted for pasting into a shell, ' itself escaped.
+		return "sudo pacman -U '" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+	}
+	return ""
 }

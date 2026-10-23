@@ -73,6 +73,7 @@ Icon=sharkbitetorrent
 Terminal=false
 Categories=Network;FileTransfer;P2P;
 MimeType=%s;
+StartupWMClass=sharkbitetorrent
 `, execPath, strings.Join(mimeTypes, ";"))
 	p := desktopPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

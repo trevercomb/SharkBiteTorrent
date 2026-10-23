@@ -1,4 +1,5 @@
 <script lang="ts">
+  import InstallCommand from './InstallCommand.svelte'
   import { onMount } from 'svelte'
   import {
     GetVpnStatus, ListTorrents, AddMagnet, PickTorrentFile, GetSettings,
@@ -332,7 +333,7 @@
           <button onclick={() => (askDirect === 'download' ? downloadUpdate(true) : installUpdate(true))}>Use normal connection</button>
           <button onclick={() => (askDirect = null)}>Cancel</button>
         {:else if downloaded}
-          <span class="ok">✓ Verified and saved: {downloaded.path}. {downloaded.hint}</span>
+          <InstallCommand path={downloaded.path} hint={downloaded.hint} command={downloaded.command} />
         {:else if update.canInstall}
           <button class="primary" onclick={() => installUpdate()}>Update now</button>
         {:else if update.canDownload}

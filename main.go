@@ -12,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
 
@@ -76,6 +77,17 @@ func main() {
 		Mac: &mac.Options{
 			OnUrlOpen:  func(u string) { app.handleArgs([]string{u}, true) },
 			OnFileOpen: func(p string) { app.handleArgs([]string{p}, true) },
+		},
+		// Linux: the app's icon on the window (X11), and a program name that
+		// is the menu entry's file name, sharkbitetorrent.desktop: on Wayland
+		// the window's app ID comes from it, and the desktop takes the icon
+		// from the entry it names (it showed Wails' logo). Hardware
+		// acceleration stays off, as Wails sets it when there are no Linux
+		// options (rendering problems with some drivers, wails#2977).
+		Linux: &linux.Options{
+			Icon:             windowIcon,
+			ProgramName:      "sharkbitetorrent",
+			WebviewGpuPolicy: linux.WebviewGpuPolicyNever,
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,

@@ -486,6 +486,9 @@ func (a *App) canDownloadUpdates() bool {
 type DownloadedUpdate struct {
 	Path string `json:"path"`
 	Hint string `json:"hint"` // how to install it
+	// Command: the command that installs it, if it's installed by one (the
+	// pacman package), shown with a Copy button.
+	Command string `json:"command"`
 }
 
 // DownloadUpdate (Linux, macOS) downloads version's file for this computer,
@@ -554,8 +557,24 @@ func (a *App) DownloadUpdate(version string, allowDirect bool) (DownloadedUpdate
 		}
 	}
 	os.Remove(tmp)
-	platform.RevealPath(final, false)
-	return DownloadedUpdate{Path: final, Hint: installHint(final)}, nil
+	// Not opened in the file manager by itself: its window covered the
+	// instructions (see ShowDownloadedUpdate).
+	a.mu.Lock()
+	a.downloadedUpdate = final
+	a.mu.Unlock()
+	return DownloadedUpdate{Path: final, Hint: installHint(final), Command: installCommand(final)}, nil
+}
+
+// ShowDownloadedUpdate shows the update file DownloadUpdate saved in the
+// file manager (only that file).
+func (a *App) ShowDownloadedUpdate() error {
+	a.mu.Lock()
+	p := a.downloadedUpdate
+	a.mu.Unlock()
+	if p == "" {
+		return errors.New("no update has been downloaded")
+	}
+	return platform.RevealPath(p, false)
 }
 
 func (a *App) updateDownloadMarker() string {

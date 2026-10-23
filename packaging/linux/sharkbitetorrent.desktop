@@ -8,4 +8,4 @@ Icon=sharkbitetorrent
 Terminal=false
 Categories=Network;FileTransfer;P2P;
 MimeType=x-scheme-handler/magnet;application/x-bittorrent;
-StartupWMClass=SharkBiteTorrent
+StartupWMClass=sharkbitetorrent

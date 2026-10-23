@@ -202,6 +202,10 @@ export function SetStartup(arg1) {
   return window['go']['main']['App']['SetStartup'](arg1);
 }
 
+export function ShowDownloadedUpdate() {
+  return window['go']['main']['App']['ShowDownloadedUpdate']();
+}
+
 export function SkipUpdate(arg1) {
   return window['go']['main']['App']['SkipUpdate'](arg1);
 }

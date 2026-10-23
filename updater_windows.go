@@ -60,3 +60,5 @@ func cleanUpdateLeftovers(string) {}
 func updateAsset(string, string) string { return "" }
 
 func installHint(string) string { return "" }
+
+func installCommand(string) string { return "" }

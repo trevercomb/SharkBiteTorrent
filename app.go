@@ -63,12 +63,13 @@ type App struct {
 	scanning    map[string]bool // torrents being scanned right now
 	// autoVerified: torrents verified automatically this session, so "all
 	// downloads" doesn't re-read one again after its repair.
-	autoVerified map[string]bool
-	verifyFails  map[string]int          // auto-verify attempts that failed, by hash (see autoVerify); guarded by mu
-	work         map[string]*torrentWork // background work reading a torrent's files (see workCtx)
-	removing     map[string]bool         // torrents being removed; kept across engine restarts
-	proxy        *socks.Server           // local SOCKS5 proxy into the tunnel, for Prowlarr/Jackett
-	proxyErr     string
+	autoVerified     map[string]bool
+	verifyFails      map[string]int          // auto-verify attempts that failed, by hash (see autoVerify); guarded by mu
+	downloadedUpdate string                  // the update file DownloadUpdate saved (see ShowDownloadedUpdate); guarded by mu
+	work             map[string]*torrentWork // background work reading a torrent's files (see workCtx)
+	removing         map[string]bool         // torrents being removed; kept across engine restarts
+	proxy            *socks.Server           // local SOCKS5 proxy into the tunnel, for Prowlarr/Jackett
+	proxyErr         string
 	// connMu serializes connecting and reconnecting, so the startup connect
 	// and quick successive Reconnects can't interleave. reconnectGen lets a
 	// queued Reconnect see that a newer one supersedes it.

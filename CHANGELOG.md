@@ -7,6 +7,10 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 ### Added
 - **Beta update channel** (Settings → App → Update channel): choose **Beta** to also be offered previews of the next version, signed and checked like releases. **Stable** (the default) offers releases only. Not in the Microsoft Store version, which the Store updates.
 
+### Fixed
+- Linux: after **Download (verified)**, the command that installs the update (`sudo pacman -U …`) is shown in its own box with a **Copy** button, and the window scrolls to it. Before, it was a line of text that a file manager window, opened by itself over the app, usually covered. **Show in folder** opens the folder when you want it.
+- Linux: the window showed the logo of Wails, the toolkit it's built with, instead of Shark BiteTorrent's icon (in the title bar and the taskbar, on Wayland in particular).
+
 ## [0.2.40] - 2026-10-22
 
 ### Added

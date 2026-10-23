@@ -106,6 +106,8 @@ export function SetSearchProxy(arg1:boolean):Promise<main.ProxyStatus>;
 
 export function SetStartup(arg1:boolean):Promise<void>;
 
+export function ShowDownloadedUpdate():Promise<void>;
+
 export function SkipUpdate(arg1:string):Promise<void>;
 
 export function StartRemotePairing(arg1:boolean):Promise<main.RemotePairing>;

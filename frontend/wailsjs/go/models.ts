@@ -252,6 +252,7 @@ export namespace main {
 	export class DownloadedUpdate {
 	    path: string;
 	    hint: string;
+	    command: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DownloadedUpdate(source);
@@ -261,6 +262,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
 	        this.hint = source["hint"];
+	        this.command = source["command"];
 	    }
 	}
 	

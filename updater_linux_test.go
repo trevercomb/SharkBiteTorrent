@@ -29,8 +29,11 @@ func TestFreeNameAndHint(t *testing.T) {
 	if got := freeName(dir, name); got != filepath.Join(dir, "sharkbitetorrent-0.2.37-1-x86_64 (2).pkg.tar.zst") {
 		t.Errorf("taken: %q", got)
 	}
-	if got := installHint("/home/o'brien/Downloads/x.pkg.tar.zst"); got != `Install it with: sudo pacman -U '/home/o'\''brien/Downloads/x.pkg.tar.zst'` {
-		t.Errorf("hint: %s", got)
+	if got := installCommand("/home/o'brien/Downloads/x.pkg.tar.zst"); got != `sudo pacman -U '/home/o'\''brien/Downloads/x.pkg.tar.zst'` {
+		t.Errorf("command: %s", got)
+	}
+	if got := installCommand("/home/o/Downloads/x.tar.gz"); got != "" {
+		t.Errorf("tarball command: %q", got)
 	}
 }
 
