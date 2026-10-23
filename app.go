@@ -349,6 +349,14 @@ func (a *App) onSecondInstance(data options.SecondInstanceData) {
 		runtime.LogWarning(a.ctx, "ignored a launch that arrived while quitting; open it again once the app has quit")
 		return
 	}
+	for _, arg := range data.Args {
+		if arg == platform.AutostartArg {
+			// A sign-in start while the app already runs (macOS: the agent
+			// started again after RefreshStartup re-registered it): nothing
+			// to do, and no window.
+			return
+		}
+	}
 	a.handleArgs(data.Args, true)
 	if a.ctx != nil {
 		a.showWindow()
