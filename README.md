@@ -141,7 +141,7 @@ All platforms need:
 - **Node.js 22+** (with npm): <https://nodejs.org/>
 - **Wails CLI v2.16**:
   ```sh
-  go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+  go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
   ```
   Make sure `$(go env GOPATH)/bin` is on your `PATH`, then check your setup with `wails doctor`.
 
