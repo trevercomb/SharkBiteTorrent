@@ -82,12 +82,48 @@ func (p pia) Login(ctx context.Context, creds map[string]string) (*Account, erro
 	if user == "" || pass == "" {
 		return nil, errors.New("enter your PIA username and password")
 	}
-	if _, err := p.token(ctx, user, pass); err != nil {
+	token, err := p.token(ctx, user, pass)
+	if err != nil {
 		return nil, err
 	}
 	// Tokens expire after a day, so keep the password (encrypted at rest by
-	// the app) to get a fresh one on each connect.
-	return &Account{Provider: "pia", Display: user, Data: map[string]string{"username": user, "password": pass}}, nil
+	// the app) to get a new one when the saved token is too old.
+	acc := &Account{Provider: "pia", Display: user, Data: map[string]string{"username": user, "password": pass}}
+	saveToken(acc, token, time.Now())
+	return acc, nil
+}
+
+// PIA's tokens last 24 hours. One is reused for piaTokenUse, so it never
+// runs out during a connect: signing in for every connect (each start,
+// update and Retry) gets an account rate-limited (HTTP 429) quickly.
+const (
+	piaTokenUse     = 20 * time.Hour
+	piaToken        = CachePrefix + "token"
+	piaTokenExpires = CachePrefix + "tokenExpires" // unix seconds
+)
+
+func saveToken(acc *Account, token string, now time.Time) {
+	acc.Data[piaToken] = token
+	acc.Data[piaTokenExpires] = strconv.FormatInt(now.Add(piaTokenUse).Unix(), 10)
+}
+
+// savedToken returns the account's token if it's still good to use.
+func savedToken(acc *Account, now time.Time) string {
+	exp, err := strconv.ParseInt(acc.Data[piaTokenExpires], 10, 64)
+	if err != nil || !now.Before(time.Unix(exp, 0)) {
+		return ""
+	}
+	return acc.Data[piaToken]
+}
+
+// freshToken signs in for a new token and saves it in acc.
+func (p pia) freshToken(ctx context.Context, acc *Account) (string, error) {
+	token, err := p.token(ctx, acc.Data["username"], acc.Data["password"])
+	if err != nil {
+		return "", err
+	}
+	saveToken(acc, token, time.Now())
+	return token, nil
 }
 
 func (pia) Logout(context.Context, *Account) error { return nil }
@@ -168,10 +204,15 @@ func piaClient(ip, cn string, dial func(ctx context.Context, network, addr strin
 	}
 }
 
+// Connect may save a new token in acc.Data; the caller saves the account.
 func (p pia) Connect(ctx context.Context, acc *Account, region, home string) (*Connection, error) {
-	token, err := p.token(ctx, acc.Data["username"], acc.Data["password"])
-	if err != nil {
-		return nil, err
+	var err error
+	token := savedToken(acc, time.Now())
+	saved := token != ""
+	if !saved {
+		if token, err = p.freshToken(ctx, acc); err != nil {
+			return nil, err
+		}
 	}
 	regs, err := p.regions(ctx)
 	if err != nil {
@@ -210,12 +251,30 @@ func (p pia) Connect(ctx context.Context, acc *Account, region, home string) (*C
 		PeerIP     string   `json:"peer_ip"`
 		DNS        []string `json:"dns_servers"`
 	}
-	q := url.Values{"pt": {token}, "pubkey": {pub}}
-	if err := getJSON(ctx, hc, "https://"+srv.CN+":1337/addKey?"+q.Encode(), &wg); err != nil {
-		return nil, fmt.Errorf("PIA addKey: %w", err)
+	// addKey's refused reports whether the server answered with a refusal
+	// (as opposed to not being reachable).
+	addKey := func(token string) (refused bool, err error) {
+		q := url.Values{"pt": {token}, "pubkey": {pub}}
+		if err := getJSON(ctx, hc, "https://"+srv.CN+":1337/addKey?"+q.Encode(), &wg); err != nil {
+			s := statusOf(err)
+			return s/100 == 4 && s != http.StatusTooManyRequests, fmt.Errorf("PIA addKey: %w", err)
+		}
+		if wg.Status != "OK" {
+			return true, fmt.Errorf("PIA addKey: %s %s", wg.Status, wg.Message)
+		}
+		return false, nil
 	}
-	if wg.Status != "OK" {
-		return nil, fmt.Errorf("PIA addKey: %s %s", wg.Status, wg.Message)
+	refused, err := addKey(token)
+	if refused && saved {
+		// The saved token isn't accepted any more (the password was
+		// changed, say): sign in once for a new one and try again.
+		if token, err = p.freshToken(ctx, acc); err != nil {
+			return nil, err
+		}
+		_, err = addKey(token)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	conn := &Connection{

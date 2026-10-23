@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -213,6 +214,9 @@ func getJSON(ctx context.Context, hc *http.Client, url string, v any, setup ...f
 		return hideURL(err)
 	}
 	defer resp.Body.Close()
+	if err := rateLimited(resp); err != nil {
+		return err
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if resp.StatusCode/100 != 2 {
 		return &httpError{resp.StatusCode, strings.TrimSpace(string(body))}
@@ -222,9 +226,17 @@ func getJSON(ctx context.Context, hc *http.Client, url string, v any, setup ...f
 
 // do sends a provider API request; errors never include the URL's path or
 // query, which can carry tokens (PIA's addKey?pt=…, getSignature?token=…).
+// HTTP 429 comes back as a *RateLimitError.
 func do(req *http.Request) (*http.Response, error) {
 	resp, err := httpClient().Do(req)
-	return resp, hideURL(err)
+	if err != nil {
+		return nil, hideURL(err)
+	}
+	if err := rateLimited(resp); err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	return resp, nil
 }
 
 // hideURL keeps only the scheme and host of the URL in an HTTP error, so
@@ -240,6 +252,41 @@ func hideURL(err error) error {
 	}
 	return &url.Error{Op: ue.Op, URL: short, Err: ue.Err}
 }
+
+// RateLimitError means the provider turned a request away because of too
+// many recent ones (HTTP 429). RetryAfter is how long it asked us to wait,
+// or 0 if it didn't say.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return "the provider is limiting requests after too many recent attempts (HTTP 429)"
+}
+
+// rateLimited returns a *RateLimitError if resp is HTTP 429.
+func rateLimited(resp *http.Response) error {
+	if resp.StatusCode != http.StatusTooManyRequests {
+		return nil
+	}
+	return &RateLimitError{RetryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+}
+
+// retryAfter reads a Retry-After header: seconds, or an HTTP date.
+func retryAfter(h string, now time.Time) time.Duration {
+	if s, err := strconv.Atoi(strings.TrimSpace(h)); err == nil && s > 0 {
+		return time.Duration(s) * time.Second
+	}
+	if t, err := http.ParseTime(h); err == nil && t.After(now) {
+		return t.Sub(now)
+	}
+	return 0
+}
+
+// Cached state in Account.Data (a provider's session token, say) has keys
+// starting with CachePrefix. It's saved with the account but isn't part of
+// what identifies it: refreshing it isn't a change of account.
+const CachePrefix = "cache."
 
 type httpError struct {
 	Status int

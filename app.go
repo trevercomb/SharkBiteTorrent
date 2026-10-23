@@ -46,6 +46,14 @@ type App struct {
 	instanceLock *os.File
 	secondary    bool
 	markerMu     sync.Mutex // the update-download marker (updater.go)
+	accountsMu   sync.Mutex // reading, changing and saving accounts.json (accounts.go)
+	// The VPN provider turned requests away (HTTP 429): none go to it
+	// before limitUntil, and the app connects again by itself then
+	// (accounts.go). Guarded by mu.
+	limitProvider string
+	limitUntil    time.Time
+	limitStrikes  int
+	limitTimer    *time.Timer
 	stopOnce     sync.Once  // stopAll
 	// installing: an update is being installed (InstallUpdate); a second
 	// one at the same time (a double click) is refused.
@@ -451,10 +459,15 @@ func (a *App) prepareConn(set Settings) (*preparedConn, error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		c, err := prov.Connect(ctx, acc, set.AccountRegion, p.home)
-		if err != nil {
-			return nil, err
+		if err := a.rateLimitedNow(set.AccountProvider); err != nil {
+			return nil, err // asking again before then only makes it last longer
 		}
+		c, err := prov.Connect(ctx, acc, set.AccountRegion, p.home)
+		a.saveAccountCache(set.AccountProvider, acc) // a new token, even if connecting failed after
+		if err != nil {
+			return nil, a.noteRateLimit(set.AccountProvider, err)
+		}
+		a.clearRateLimit(set.AccountProvider)
 		p.conn = c
 	}
 	if set.VpnProvider == "custom" {
@@ -508,7 +521,15 @@ func accountKey(acc *vpnprov.Account) string {
 	if acc == nil {
 		return ""
 	}
-	data, _ := json.Marshal(acc.Data)
+	// Cached state (a session token) can be refreshed by connecting; that
+	// isn't a different account.
+	id := map[string]string{}
+	for k, v := range acc.Data {
+		if !strings.HasPrefix(k, vpnprov.CachePrefix) {
+			id[k] = v
+		}
+	}
+	data, _ := json.Marshal(id)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8])
 }
