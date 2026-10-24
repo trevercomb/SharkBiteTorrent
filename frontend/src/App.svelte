@@ -8,7 +8,7 @@
     ListDownloads, PauseDownload, ResumeDownload, RemoveDownload, GetNewLink, OpenDownloadFolder,
   } from '../wailsjs/go/main/App.js'
   import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js'
-  import type { ddl, engine, main } from '../wailsjs/go/models'
+  import type { engine, main } from '../wailsjs/go/models'
   import FilesPanel from './FilesPanel.svelte'
   import PasteLinks from './PasteLinks.svelte'
   import ReleaseNotes from './ReleaseNotes.svelte'
@@ -28,12 +28,12 @@
   let removing = $state<engine.Status | null>(null)
   let deleteFiles = $state(false)
   // Direct downloads ("Paste links"), listed above the torrents.
-  let downloads = $state<ddl.Status[]>([])
+  let downloads = $state<main.DownloadStatus[]>([])
   // Several can be selected (Ctrl/Shift+click): pastes bring in many parts.
   let selectedDls = $state(new Set<string>())
   let lastDl: string | null = null // where a Shift+click range starts
   let showPaste = $state(false)
-  let removingDls = $state<ddl.Status[] | null>(null)
+  let removingDls = $state<main.DownloadStatus[] | null>(null)
 
   // "off" is the user's explicit No VPN choice; the engine runs either way.
   const connected = $derived(vpn.state === 'connected' || vpn.state === 'off')
@@ -259,21 +259,43 @@
     return stateLabel[t.state] ?? t.state
   }
 
-  function dlStatus(d: ddl.Status): string {
+  function dlStatus(d: main.DownloadStatus): string {
     if (removingNow.has(d.id)) return 'Removing…'
     if (d.state === 'running') return d.offline ? 'Waiting for the VPN' : 'Downloading'
     if (d.state === 'needsLink') return '⚠ Needs a new link'
     if (d.state === 'failed') return '⚠ Failed'
+    if (d.state === 'done') {
+      // As with torrents, the malware scan takes over once it's finished.
+      if (d.scan === 'scanning') return 'Scanning for malware…'
+      if (d.scan === 'threat') return '⚠ Threat found'
+      if (d.scan === 'gone') return '⚠ File removed'
+      if (d.scan === '') return 'Checking…'
+    }
     return dlLabel[d.state] ?? d.state
   }
   const dlLabel: Record<string, string> = { queued: 'Queued', paused: 'Paused', done: 'Done' }
 
-  function dlEta(d: ddl.Status): string {
+  // The status cell's tooltip: the error, or what the scan found.
+  function dlStatusTitle(d: main.DownloadStatus): string {
+    if (d.state !== 'done') return d.error
+    switch (d.scan) {
+      case 'clean': return `Scanned with ${d.scanEngine}: no known threats.`
+      case 'threat': return `${d.scanEngine} found: ${d.threats.join(', ')}. Don't open it unless you're sure it's a false alarm.`
+      case 'gone': return d.threats.length
+        ? `${d.scanEngine} found ${d.threats.join(', ')} and removed the file. If you're sure it's a false alarm, restore it in your antivirus.`
+        : 'The file is no longer there. Your antivirus may have quarantined it; check its history.'
+      case 'off': return `Not scanned: ${d.scanError}.`
+      case 'error': return `Couldn't scan it: ${d.scanError}`
+    }
+    return ''
+  }
+
+  function dlEta(d: main.DownloadStatus): string {
     if (d.state !== 'running' || d.rate <= 0 || d.size <= 0) return '–'
     return duration(Math.round((d.size - d.have) / d.rate))
   }
 
-  const dlProgress = (d: ddl.Status) => (d.size > 0 ? d.have / d.size : d.state === 'done' ? 1 : 0)
+  const dlProgress = (d: main.DownloadStatus) => (d.size > 0 ? d.have / d.size : d.state === 'done' ? 1 : 0)
 
   // Click selects one download, Ctrl+click adds or removes one, Shift+click
   // selects a range, as in a file manager.
@@ -295,17 +317,17 @@
     lastDl = id
   }
 
-  const canResume = (d: ddl.Status) => d.state === 'paused' || d.state === 'failed'
-  const canPause = (d: ddl.Status) => d.state === 'running' || d.state === 'queued'
+  const canResume = (d: main.DownloadStatus) => d.state === 'paused' || d.state === 'failed'
+  const canPause = (d: main.DownloadStatus) => d.state === 'running' || d.state === 'queued'
 
   // Pause or resume every selected download that can be.
-  function eachDl(list: ddl.Status[], ok: (d: ddl.Status) => boolean, fn: (id: string) => Promise<unknown>) {
+  function eachDl(list: main.DownloadStatus[], ok: (d: main.DownloadStatus) => boolean, fn: (id: string) => Promise<unknown>) {
     run(async () => {
       for (const d of list.filter(ok)) await fn(d.id)
     })
   }
 
-  async function removeDownloads(list: ddl.Status[], files: boolean) {
+  async function removeDownloads(list: main.DownloadStatus[], files: boolean) {
     const ids = list.map(d => d.id).filter(id => !removingNow.has(id))
     removingNow = new Set([...removingNow, ...ids])
     selectedDls = new Set([...selectedDls].filter(id => !ids.includes(id)))
@@ -315,7 +337,7 @@
     removingNow = new Set([...removingNow].filter(h => !ids.includes(h)))
   }
 
-  function askRemoveDownloads(list: ddl.Status[]) {
+  function askRemoveDownloads(list: main.DownloadStatus[]) {
     if (list.length === 0) return
     removingDls = list
     deleteFiles = false
@@ -323,17 +345,17 @@
 
   // Right-click menu on a download row. Its Pause/Resume/Remove act on the
   // whole selection when the clicked row is part of it.
-  let dlMenu = $state<{ x: number; y: number; d: ddl.Status } | null>(null)
+  let dlMenu = $state<{ x: number; y: number; d: main.DownloadStatus } | null>(null)
   const menuDls = $derived(dlMenu ? (selectedDls.has(dlMenu.d.id) ? selDls : [dlMenu.d]) : [])
 
-  function openDlMenu(e: MouseEvent, d: ddl.Status) {
+  function openDlMenu(e: MouseEvent, d: main.DownloadStatus) {
     e.preventDefault()
     if (!selectedDls.has(d.id)) selectDownload(d.id)
     const w = 190, h = 140
     dlMenu = { x: Math.min(e.clientX, window.innerWidth - w - 4), y: Math.min(e.clientY, window.innerHeight - h - 4), d }
   }
 
-  function dlMenuAction(fn: (d: ddl.Status) => Promise<unknown>) {
+  function dlMenuAction(fn: (d: main.DownloadStatus) => Promise<unknown>) {
     const d = dlMenu!.d
     dlMenu = null
     run(() => fn(d))
@@ -500,13 +522,18 @@
           <tbody>
             {#each downloads as d (d.id)}
               <tr class:selected={selectedDls.has(d.id)} onclick={e => selectDownload(d.id, e)} oncontextmenu={e => openDlMenu(e, d)}>
-                <td class="name" title={d.name}>{d.name || 'Starting…'}</td>
+                <td class="name" title={d.name}>
+                  {#if d.scan === 'threat' || (d.scan === 'gone' && d.threats.length)}
+                    <span class="flag threat" title="{d.scanEngine} found: {d.threats.join(', ')}">⚠</span>
+                  {/if}
+                  {d.name || 'Starting…'}
+                </td>
                 <td>{d.size > 0 ? bytes(d.size) : '–'}</td>
                 <td class="prog">
                   <div class="bar" class:seeding={d.state === 'done'} class:paused={d.state === 'paused'}><div style="width:{(dlProgress(d) * 100).toFixed(1)}%"></div></div>
                   <span>{(dlProgress(d) * 100).toFixed(1)}%</span>
                 </td>
-                <td class:warn={d.state === 'needsLink' || d.state === 'failed'} title={d.error}>
+                <td class:warn={d.state === 'needsLink' || d.state === 'failed' || d.scan === 'gone'} class:threat={d.scan === 'threat'} title={dlStatusTitle(d)}>
                   {dlStatus(d)}
                   {#if d.state === 'needsLink'}<button class="inline" onclick={e => { e.stopPropagation(); run(() => GetNewLink(d.id)) }}>Get a new link</button>{/if}
                 </td>

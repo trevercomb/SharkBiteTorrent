@@ -8,6 +8,7 @@ package ddl
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +61,9 @@ type Spec struct {
 	Done     bool      `json:"done,omitempty"`
 	Error    string    `json:"error,omitempty"` // why it failed or needs a link
 	NeedLink bool      `json:"needLink,omitempty"`
+	// Meta is the app's own data about the download (its malware scan),
+	// kept and saved with it but never looked at here.
+	Meta json.RawMessage `json:"meta,omitempty"`
 }
 
 type Status struct {
@@ -240,6 +244,19 @@ func (m *Manager) SetURL(id, url string) {
 	}
 	m.mu.Unlock()
 	m.changed()
+}
+
+// SetMeta replaces a download's Meta (see Spec).
+func (m *Manager) SetMeta(id string, meta json.RawMessage) {
+	m.mu.Lock()
+	j := m.jobs[id]
+	if j != nil {
+		j.spec.Meta = meta
+	}
+	m.mu.Unlock()
+	if j != nil {
+		m.changed()
+	}
 }
 
 // Remove stops a download and forgets it; with deleteFile, the partial (or

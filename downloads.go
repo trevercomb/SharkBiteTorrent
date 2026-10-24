@@ -36,6 +36,7 @@ type downloads struct {
 	m       *ddl.Manager
 	limiter *rate.Limiter
 	save    chan struct{} // asks the saver to write downloads.json soon
+	stop    context.CancelFunc
 
 	clientMu  sync.Mutex
 	clientTun *tunnel.Tunnel // the tunnel client was made for
@@ -81,6 +82,9 @@ func (a *App) startDownloads() {
 		}
 	}
 	go a.saveDownloadsLoop(d)
+	ctx, cancel := context.WithCancel(context.Background())
+	d.stop = cancel
+	go a.downloadScanLoop(ctx, d.m)
 }
 
 // saveDownloadsLoop writes downloads.json at most every 2 s while things change.
@@ -107,6 +111,7 @@ func (a *App) stopDownloads() {
 		return
 	}
 	a.closeHostPages()
+	d.stop()
 	d.m.Close()
 	a.writeDownloads(d)
 }
@@ -361,12 +366,20 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 	}
 }
 
-func (a *App) ListDownloads() []ddl.Status {
+func (a *App) ListDownloads() []DownloadStatus {
+	out := []DownloadStatus{}
 	m, err := a.downloadManager()
 	if err != nil {
-		return []ddl.Status{}
+		return out
 	}
-	return m.Statuses()
+	specs := map[string]ddl.Spec{}
+	for _, s := range m.Specs() {
+		specs[s.ID] = s
+	}
+	for _, st := range m.Statuses() {
+		out = append(out, a.downloadStatus(st, specs[st.ID]))
+	}
+	return out
 }
 
 func (a *App) PauseDownload(id string) error {

@@ -5,7 +5,6 @@ import {main} from '../models';
 import {search} from '../models';
 import {engine} from '../models';
 import {vpnprov} from '../models';
-import {ddl} from '../models';
 import {platform} from '../models';
 
 export function AddLinks(arg1:Array<paste.Link>):Promise<main.AddLinksResult>;
@@ -60,7 +59,7 @@ export function ImportWireGuardConfig():Promise<string>;
 
 export function InstallUpdate(arg1:string,arg2:boolean):Promise<void>;
 
-export function ListDownloads():Promise<Array<ddl.Status>>;
+export function ListDownloads():Promise<Array<main.DownloadStatus>>;
 
 export function ListTorrents():Promise<Array<engine.Status>>;
 
