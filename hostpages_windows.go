@@ -48,20 +48,27 @@ type caughtDownload struct{ link, disposition string }
 
 const (
 	pageLoadWait   = 45 * time.Second
-	clickTries     = 6
+	clickTries     = 15 // a "free download" step and a countdown can take a while
 	clickWait      = 3 * time.Second
 	userClickWait  = 3 * time.Minute
 	humanCheckWait = 10 * time.Minute
 )
 
-// clickScript clicks the page's most prominent visible "download" link or
-// button: an ordinary click() from a script.
+// clickScript clicks the page's free download link or button: an ordinary
+// click() from a script. It never clicks anything that sells something (a
+// host's premium offer is often its biggest "download" button), prefers
+// "free download", then the most prominent "download". Disabled buttons
+// (a countdown that hasn't finished) are left for the next try.
 const clickScript = `(() => {
+	const sells = /premium|pric|upgrade|buy|purchase|subscri|plan|pay|vip|full speed|fast download|high speed|sign ?up|register|log ?in|account|\bapp\b|desktop|extension|install|manager/i;
+	const text = e => (e.textContent || e.value || e.title || '').trim();
 	const els = [...document.querySelectorAll('a, button, input[type=button], input[type=submit]')]
-		.filter(e => /download/i.test(e.textContent || e.value || '') && e.offsetParent !== null);
+		.filter(e => e.offsetParent !== null && !e.disabled && /download/i.test(text(e)))
+		.filter(e => !sells.test(text(e)) && !sells.test(e.getAttribute('href') || '') && !sells.test(e.className || ''));
 	const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
-	els.sort((a, b) => area(b) - area(a));
-	if (els.length) els[0].click();
+	const free = els.filter(e => /free/i.test(text(e)));
+	const pick = (free.length ? free : els).sort((a, b) => area(b) - area(a))[0];
+	if (pick) pick.click();
 })()`
 
 func (a *App) openHostPages(pages []hostPage) error {

@@ -213,8 +213,30 @@ func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
 	a.mu.Lock()
 	dir := a.settings.DownloadDir
 	a.mu.Unlock()
+	// A link that looks like a file by its name may be a file host's page
+	// (many put the file name in their page addresses): ask first.
+	isFile := make(map[string]bool)
+	var wg sync.WaitGroup
+	var isFileMu sync.Mutex
+	for _, l := range links {
+		if l.Kind == paste.File {
+			wg.Add(1)
+			go func(u string) {
+				defer wg.Done()
+				ok := a.servesFile(u)
+				isFileMu.Lock()
+				isFile[u] = ok
+				isFileMu.Unlock()
+			}(l.URL)
+		}
+	}
+	wg.Wait()
+
 	var pages []hostPage
 	for _, l := range links {
+		if l.Kind == paste.File && !isFile[l.URL] {
+			l.Kind = paste.Page
+		}
 		var err error
 		switch l.Kind {
 		case paste.Magnet:
@@ -249,6 +271,31 @@ func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// servesFile asks for a link's first byte: true if the answer is the file
+// itself, false if it's a web page, a refusal (a file host's page, or a
+// check that only a browser passes) or nothing at all.
+func (a *App) servesFile(url string) bool {
+	hc, err := a.downloadClient()
+	if err != nil {
+		return true // no connection to ask with: the download waits and tells later
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", paste.UserAgent)
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	return (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) && ct != "text/html"
 }
 
 // addTorrentURL fetches a .torrent file through the VPN and adds it.
