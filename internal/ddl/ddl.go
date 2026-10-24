@@ -71,11 +71,17 @@ type Status struct {
 	Rate  int64  `json:"rate"` // bytes per second
 	State State  `json:"state"`
 	Error string `json:"error"`
+	// Offline: running, but waiting for a connection (the VPN is down).
+	Offline bool `json:"offline"`
 }
 
 // ErrLinkExpired means the server refused a link that worked before (or
 // answered with a web page): a fresh link from the file host is needed.
 var ErrLinkExpired = errors.New("the download link stopped working")
+
+// ErrOffline wraps an error from Manager.Client: there's no connection (the
+// VPN is down), so downloads wait instead of failing.
+var ErrOffline = errors.New("no connection")
 
 type Manager struct {
 	// Client returns the HTTP client to use now (the VPN's); an error means
@@ -103,7 +109,8 @@ type job struct {
 	done   chan struct{}
 
 	// live positions (written, maybe not yet synced), guarded by Manager.mu
-	pos []int64
+	pos     []int64
+	offline bool // waiting for a connection; guarded by Manager.mu
 
 	rateAt   time.Time
 	rateHave int64
@@ -111,6 +118,9 @@ type job struct {
 }
 
 var minSegment int64 = 8 << 20 // don't split files into pieces smaller than this (tests lower it)
+
+// offlineWait is how long a download waits before checking the connection again (tests lower it).
+var offlineWait = 5 * time.Second
 
 const (
 	syncEvery    = 5 * time.Second
@@ -311,7 +321,8 @@ func (m *Manager) Statuses() []Status {
 			j.rateAt, j.rateHave = now, have
 		}
 		out = append(out, Status{ID: id, Name: j.spec.Name, Dir: j.spec.Dir, Page: j.spec.Page,
-			Size: j.spec.Size, Have: have, Rate: j.rate, State: j.state, Error: j.spec.Error})
+			Size: j.spec.Size, Have: have, Rate: j.rate, State: j.state, Error: j.spec.Error,
+			Offline: j.state == Running && j.offline})
 	}
 	return out
 }
@@ -463,7 +474,7 @@ func (m *Manager) syncProgress(j *job, f *os.File) {
 func (m *Manager) request(ctx context.Context, url string, from, to int64) (*http.Response, error) {
 	hc, err := m.Client()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w (%v)", ErrOffline, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -511,7 +522,7 @@ func (m *Manager) probe(ctx context.Context, j *job) error {
 	m.mu.Lock()
 	url := j.spec.URL
 	m.mu.Unlock()
-	resp, err := m.retry(ctx, func() (*http.Response, error) { return m.request(ctx, url, 0, 1) })
+	resp, err := m.retry(ctx, j, func() (*http.Response, error) { return m.request(ctx, url, 0, 1) })
 	if err != nil {
 		return err
 	}
@@ -559,11 +570,20 @@ func (m *Manager) probe(ctx context.Context, j *job) error {
 }
 
 // retry calls do until it succeeds, the link has expired, or it fails
-// maxRetries times; it waits longer each time.
-func (m *Manager) retry(ctx context.Context, do func() (*http.Response, error)) (*http.Response, error) {
+// maxRetries times; it waits longer each time. While there's no connection
+// it just waits.
+func (m *Manager) retry(ctx context.Context, j *job, do func() (*http.Response, error)) (*http.Response, error) {
 	wait := firstBackoff
 	for try := 1; ; try++ {
 		resp, err := do()
+		if errors.Is(err, ErrOffline) {
+			if err := m.waitOnline(ctx, j); err != nil {
+				return nil, err
+			}
+			try--
+			continue
+		}
+		m.setOffline(j, false)
 		if err == nil || errors.Is(err, ErrLinkExpired) || ctx.Err() != nil || try >= maxRetries {
 			return resp, err
 		}
@@ -598,6 +618,13 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 			}
 		}
 		resp, err := m.request(ctx, url, pos, seg.End)
+		if errors.Is(err, ErrOffline) {
+			if err := m.waitOnline(ctx, j); err != nil {
+				return err
+			}
+			continue
+		}
+		m.setOffline(j, false)
 		if err == nil {
 			err = m.copySegment(ctx, j, f, i, resp, pos, seg.End, buf)
 			resp.Body.Close()
@@ -672,6 +699,24 @@ func (m *Manager) copySegment(ctx context.Context, j *job, f *os.File, i int, re
 			return rerr
 		}
 	}
+}
+
+// waitOnline waits a little while there's no connection (the VPN is down or
+// reconnecting); it doesn't count as a failed attempt.
+func (m *Manager) waitOnline(ctx context.Context, j *job) error {
+	m.setOffline(j, true)
+	select {
+	case <-time.After(offlineWait):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Manager) setOffline(j *job, on bool) {
+	m.mu.Lock()
+	j.offline = on
+	m.mu.Unlock()
 }
 
 // waitN waits for n bytes from the limiter, in pieces it can grant.

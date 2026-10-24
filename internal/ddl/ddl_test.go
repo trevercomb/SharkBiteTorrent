@@ -328,3 +328,30 @@ func TestContentRange(t *testing.T) {
 		}
 	}
 }
+
+// While there's no connection (the VPN is down), downloads wait as long as it
+// takes instead of failing, and finish once it's back.
+func TestOffline(t *testing.T) {
+	defer func(v time.Duration) { offlineWait = v }(offlineWait)
+	offlineWait = 10 * time.Millisecond
+	data := testData(t, 100<<10)
+	srv := rangeServer(t, data, nil)
+	var down atomic.Bool
+	down.Store(true)
+	m := newManager(nil)
+	m.Client = func() (*http.Client, error) {
+		if down.Load() {
+			return nil, errors.New("the VPN isn't connected")
+		}
+		return http.DefaultClient, nil
+	}
+	dir := t.TempDir()
+	m.Add(Spec{ID: "a", URL: srv.URL + "/x", Dir: dir, Name: "o.bin"})
+	time.Sleep(time.Duration(maxRetries*3) * offlineWait) // longer than the retries would last
+	if s := m.Statuses()[0]; s.State != Running || !s.Offline {
+		t.Fatalf("while offline: %+v", s)
+	}
+	down.Store(false)
+	waitState(t, m, "a", Done)
+	checkFile(t, filepath.Join(dir, "o.bin"), data)
+}
