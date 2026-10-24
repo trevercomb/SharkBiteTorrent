@@ -397,6 +397,14 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 		return err
 	}
 	defer f.Close()
+	// Segments write all over the file from the start: give it its full
+	// size up front, without the filesystem filling the gaps with zeros.
+	makeSparse(f) // best effort: on filesystems without sparse files it's just slower
+	if st, err := f.Stat(); err == nil && spec.Size > 0 && st.Size() < spec.Size {
+		if err := f.Truncate(spec.Size); err != nil {
+			return err
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
