@@ -51,8 +51,17 @@ func Read(ctx context.Context, hc *http.Client, input string) (string, error) {
 	if looksLikePrivateBin(u) {
 		return readPrivateBin(ctx, hc, u)
 	}
-	return fetchPage(ctx, hc, u)
+	if l, ok := classify(input); ok && l.Kind != Page {
+		return input, nil // a link to a file (or a .torrent) is itself the list
+	}
+	text, err := fetchPage(ctx, hc, u)
+	if errors.Is(err, errNotPage) {
+		return input, nil // it was a file after all, without a telling name
+	}
+	return text, err
 }
+
+var errNotPage = errors.New("not a page")
 
 func fetchPage(ctx context.Context, hc *http.Client, u *url.URL) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -71,7 +80,7 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL) (string, error)
 	}
 	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if ct != "" && !strings.HasPrefix(ct, "text/") && ct != "application/xhtml+xml" && ct != "application/json" {
-		return "", errors.New("that address is a file, not a page with links: add it as a link instead")
+		return "", errNotPage
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxPage))
 	if err != nil {

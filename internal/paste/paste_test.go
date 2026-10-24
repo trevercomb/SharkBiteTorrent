@@ -145,4 +145,18 @@ func TestReadText(t *testing.T) {
 	if err != nil || got != "https://a.example/x and https://b.example/y" {
 		t.Errorf("got %q, %v", got, err)
 	}
+	// A single link to a file is itself the list: nothing is fetched.
+	const iso = "https://dl.example/releases/os-1.0.iso"
+	if got, err := Read(context.Background(), nil, iso); err != nil || got != iso {
+		t.Errorf("file link: got %q, %v", got, err)
+	}
+	// So is an address that turns out to be a file.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write([]byte("binary"))
+	}))
+	defer srv.Close()
+	if got, err := Read(context.Background(), srv.Client(), srv.URL+"/get?id=5"); err != nil || got != srv.URL+"/get?id=5" {
+		t.Errorf("file behind a plain address: got %q, %v", got, err)
+	}
 }
