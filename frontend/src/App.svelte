@@ -29,14 +29,16 @@
   let deleteFiles = $state(false)
   // Direct downloads ("Paste links"), listed above the torrents.
   let downloads = $state<ddl.Status[]>([])
-  let selectedDl = $state<string | null>(null)
+  // Several can be selected (Ctrl/Shift+click): pastes bring in many parts.
+  let selectedDls = $state(new Set<string>())
+  let lastDl: string | null = null // where a Shift+click range starts
   let showPaste = $state(false)
-  let removingDl = $state<ddl.Status | null>(null)
+  let removingDls = $state<ddl.Status[] | null>(null)
 
   // "off" is the user's explicit No VPN choice; the engine runs either way.
   const connected = $derived(vpn.state === 'connected' || vpn.state === 'off')
   const sel = $derived(torrents.find(t => t.hash === selected))
-  const selDl = $derived(downloads.find(d => d.id === selectedDl))
+  const selDls = $derived(downloads.filter(d => selectedDls.has(d.id)))
   const totalDown = $derived(torrents.reduce((s, t) => s + t.downRate, 0) + downloads.reduce((s, d) => s + d.rate, 0))
   const totalUp = $derived(torrents.reduce((s, t) => s + t.upRate, 0))
 
@@ -46,7 +48,9 @@
       torrents = await ListTorrents()
       if (selected && !torrents.some(t => t.hash === selected)) selected = null
       downloads = await ListDownloads()
-      if (selectedDl && !downloads.some(d => d.id === selectedDl)) selectedDl = null
+      if ([...selectedDls].some(id => !downloads.some(d => d.id === id))) {
+        selectedDls = new Set([...selectedDls].filter(id => downloads.some(d => d.id === id)))
+      }
     } catch (e) {
       error = String(e)
     }
@@ -179,7 +183,7 @@
   function openMenu(e: MouseEvent, t: engine.Status) {
     e.preventDefault()
     selected = t.hash
-    selectedDl = null
+    selectedDls = new Set()
     // Keep the menu inside the window.
     const w = 170, h = 120
     menu = {
@@ -199,6 +203,15 @@
     if (e.key === 'Escape') {
       menu = null
       dlMenu = null
+    }
+    // Keys for the downloads list, unless typing somewhere or a dialog is open.
+    const typing = (e.target as HTMLElement)?.closest?.('input, textarea, select')
+    if (typing || showPaste || showSettings || removing || removingDls || selDls.length === 0) return
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault()
+      selectedDls = new Set(downloads.map(d => d.id))
+    } else if (e.key === 'Delete') {
+      askRemoveDownloads(selDls)
     }
   }
 
@@ -261,25 +274,60 @@
 
   const dlProgress = (d: ddl.Status) => (d.size > 0 ? d.have / d.size : d.state === 'done' ? 1 : 0)
 
-  function selectDownload(id: string) {
-    selectedDl = id
+  // Click selects one download, Ctrl+click adds or removes one, Shift+click
+  // selects a range, as in a file manager.
+  function selectDownload(id: string, e?: MouseEvent) {
     selected = null
+    if (e && (e.ctrlKey || e.metaKey)) {
+      const s = new Set(selectedDls)
+      if (s.has(id)) s.delete(id)
+      else s.add(id)
+      selectedDls = s
+    } else if (e?.shiftKey && lastDl) {
+      const ids = downloads.map(d => d.id)
+      const [a, b] = [ids.indexOf(lastDl), ids.indexOf(id)].sort((x, y) => x - y)
+      selectedDls = new Set(a < 0 ? [id] : ids.slice(a, b + 1))
+      return // the range keeps its starting point
+    } else {
+      selectedDls = new Set([id])
+    }
+    lastDl = id
   }
 
-  async function removeDownload(id: string, files: boolean) {
-    if (removingNow.has(id)) return
-    removingNow = new Set([...removingNow, id])
-    if (selectedDl === id) selectedDl = null
-    await run(() => RemoveDownload(id, files))
-    removingNow = new Set([...removingNow].filter(h => h !== id))
+  const canResume = (d: ddl.Status) => d.state === 'paused' || d.state === 'failed'
+  const canPause = (d: ddl.Status) => d.state === 'running' || d.state === 'queued'
+
+  // Pause or resume every selected download that can be.
+  function eachDl(list: ddl.Status[], ok: (d: ddl.Status) => boolean, fn: (id: string) => Promise<unknown>) {
+    run(async () => {
+      for (const d of list.filter(ok)) await fn(d.id)
+    })
   }
 
-  // Right-click menu on a download row.
+  async function removeDownloads(list: ddl.Status[], files: boolean) {
+    const ids = list.map(d => d.id).filter(id => !removingNow.has(id))
+    removingNow = new Set([...removingNow, ...ids])
+    selectedDls = new Set([...selectedDls].filter(id => !ids.includes(id)))
+    await run(async () => {
+      for (const id of ids) await RemoveDownload(id, files)
+    })
+    removingNow = new Set([...removingNow].filter(h => !ids.includes(h)))
+  }
+
+  function askRemoveDownloads(list: ddl.Status[]) {
+    if (list.length === 0) return
+    removingDls = list
+    deleteFiles = false
+  }
+
+  // Right-click menu on a download row. Its Pause/Resume/Remove act on the
+  // whole selection when the clicked row is part of it.
   let dlMenu = $state<{ x: number; y: number; d: ddl.Status } | null>(null)
+  const menuDls = $derived(dlMenu ? (selectedDls.has(dlMenu.d.id) ? selDls : [dlMenu.d]) : [])
 
   function openDlMenu(e: MouseEvent, d: ddl.Status) {
     e.preventDefault()
-    selectDownload(d.id)
+    if (!selectedDls.has(d.id)) selectDownload(d.id)
     const w = 190, h = 140
     dlMenu = { x: Math.min(e.clientX, window.innerWidth - w - 4), y: Math.min(e.clientY, window.innerHeight - h - 4), d }
   }
@@ -357,10 +405,12 @@
       {searching ? '← Torrents' : 'Search'}
     </button>
     <span class="sep"></span>
-    {#if selDl}
-      <button onclick={() => run(() => ResumeDownload(selDl.id))} disabled={selDl.state !== 'paused' && selDl.state !== 'failed'}>Resume</button>
-      <button onclick={() => run(() => PauseDownload(selDl.id))} disabled={selDl.state !== 'running' && selDl.state !== 'queued'}>Pause</button>
-      <button onclick={() => { removingDl = selDl ?? null; deleteFiles = false }} disabled={removingNow.has(selDl.id)}>Remove…</button>
+    {#if selDls.length > 0}
+      <button onclick={() => eachDl(selDls, canResume, ResumeDownload)} disabled={!selDls.some(canResume)}>Resume</button>
+      <button onclick={() => eachDl(selDls, canPause, PauseDownload)} disabled={!selDls.some(canPause)}>Pause</button>
+      <button onclick={() => askRemoveDownloads(selDls)} disabled={selDls.every(d => removingNow.has(d.id))}>
+        {selDls.length > 1 ? `Remove ${selDls.length}…` : 'Remove…'}
+      </button>
     {:else}
       <button onclick={() => sel && run(() => Resume(sel.hash, (sel.warnings ?? []).length))} disabled={!sel || sel.state !== 'paused'}>Resume</button>
       <button onclick={() => sel && run(() => Pause(sel.hash))} disabled={!sel || sel.state === 'paused'}>Pause</button>
@@ -438,13 +488,21 @@
         <table class="downloads">
           <thead>
             <tr>
-              <th class="name">Downloads</th><th>Size</th><th class="prog">Progress</th><th>Status</th>
+              <th class="name">
+                Downloads
+                {#if downloads.some(d => d.state === 'done')}
+                  <button class="inline" title="Take finished downloads off this list. Their files stay where they are."
+                    onclick={() => removeDownloads(downloads.filter(d => d.state === 'done'), false)}>
+                    Clear finished ({downloads.filter(d => d.state === 'done').length})
+                  </button>
+                {/if}
+              </th><th>Size</th><th class="prog">Progress</th><th>Status</th>
               <th>Down</th><th>ETA</th>
             </tr>
           </thead>
           <tbody>
             {#each downloads as d (d.id)}
-              <tr class:selected={d.id === selectedDl} onclick={() => selectDownload(d.id)} oncontextmenu={e => openDlMenu(e, d)}>
+              <tr class:selected={selectedDls.has(d.id)} onclick={e => selectDownload(d.id, e)} oncontextmenu={e => openDlMenu(e, d)}>
                 <td class="name" title={d.name}>{d.name || 'Starting…'}</td>
                 <td>{d.size > 0 ? bytes(d.size) : '–'}</td>
                 <td class="prog">
@@ -482,7 +540,7 @@
             {#each torrents as t (t.hash)}
               <tr
                 class:selected={t.hash === selected}
-                onclick={() => { selected = t.hash; selectedDl = null }}
+                onclick={() => { selected = t.hash; selectedDls = new Set() }}
                 oncontextmenu={e => openMenu(e, t)}
               >
                 <td class="name" title={t.name}>
@@ -556,16 +614,23 @@
   <div class="menu-catcher" onclick={() => (dlMenu = null)} oncontextmenu={e => { e.preventDefault(); dlMenu = null }}></div>
   <div class="menu" role="menu" style="left:{dlMenu.x}px; top:{dlMenu.y}px">
     <button role="menuitem" onclick={() => dlMenuAction(d => OpenDownloadFolder(d.id))}>{dlMenu.d.state === 'done' ? 'Show file' : 'Show folder'}</button>
-    {#if dlMenu.d.state === 'paused' || dlMenu.d.state === 'failed'}
-      <button role="menuitem" onclick={() => dlMenuAction(d => ResumeDownload(d.id))}>{dlMenu.d.state === 'failed' ? 'Try again' : 'Resume'}</button>
-    {:else if dlMenu.d.state === 'running' || dlMenu.d.state === 'queued'}
-      <button role="menuitem" onclick={() => dlMenuAction(d => PauseDownload(d.id))}>Pause</button>
+    {#if menuDls.some(canResume)}
+      <button role="menuitem" onclick={() => { const l = menuDls; dlMenu = null; eachDl(l, canResume, ResumeDownload) }}>
+        {menuDls.every(d => d.state === 'failed') ? 'Try again' : 'Resume'}{menuDls.length > 1 ? ` (${menuDls.filter(canResume).length})` : ''}
+      </button>
+    {/if}
+    {#if menuDls.some(canPause)}
+      <button role="menuitem" onclick={() => { const l = menuDls; dlMenu = null; eachDl(l, canPause, PauseDownload) }}>
+        Pause{menuDls.length > 1 ? ` (${menuDls.filter(canPause).length})` : ''}
+      </button>
     {/if}
     {#if dlMenu.d.page && dlMenu.d.state !== 'done'}
       <button role="menuitem" onclick={() => dlMenuAction(d => GetNewLink(d.id))}>Get a new link</button>
     {/if}
     <div class="menu-sep"></div>
-    <button role="menuitem" onclick={() => { removingDl = dlMenu!.d; deleteFiles = false; dlMenu = null }}>Remove…</button>
+    <button role="menuitem" onclick={() => { const l = menuDls; dlMenu = null; askRemoveDownloads(l) }}>
+      {menuDls.length > 1 ? `Remove ${menuDls.length}…` : 'Remove…'}
+    </button>
   </div>
 {/if}
 
@@ -573,20 +638,28 @@
   <PasteLinks onClose={() => (showPaste = false)} onDone={msg => { notice = msg; refresh() }} />
 {/if}
 
-{#if removingDl}
+{#if removingDls}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="backdrop" onclick={() => (removingDl = null)}>
+  <div class="backdrop" onclick={() => (removingDls = null)}>
     <div class="confirm" role="dialog" aria-modal="true" tabindex="-1" onclick={e => e.stopPropagation()}>
-      <h3>Remove download?</h3>
-      <p class="tname">{removingDl.name || 'Unnamed download'}</p>
+      {#if removingDls.length === 1}
+        <h3>Remove download?</h3>
+        <p class="tname">{removingDls[0].name || 'Unnamed download'}</p>
+      {:else}
+        <h3>Remove {removingDls.length} downloads?</h3>
+        <p class="tname" title={removingDls.map(d => d.name).join('\n')}>{removingDls.map(d => d.name || 'Unnamed').join(', ')}</p>
+      {/if}
       <label class="check">
         <input type="checkbox" bind:checked={deleteFiles} />
-        <span>{removingDl.state === 'done' ? 'Also delete the file' : 'Also delete what was downloaded so far'}</span>
+        <span>
+          {#if removingDls.every(d => d.state === 'done')}Also delete the {removingDls.length > 1 ? 'files' : 'file'}
+          {:else}Also delete what was downloaded{/if}
+        </span>
       </label>
-      {#if deleteFiles}<p class="danger">The file is deleted permanently, not moved to the Recycle Bin.</p>{/if}
+      {#if deleteFiles}<p class="danger">Files are deleted permanently, not moved to the Recycle Bin.</p>{/if}
       <div class="actions">
-        <button onclick={() => (removingDl = null)}>Cancel</button>
-        <button class:danger-btn={deleteFiles} class:primary={!deleteFiles} onclick={() => { const d = removingDl!; removingDl = null; removeDownload(d.id, deleteFiles) }}>
+        <button onclick={() => (removingDls = null)}>Cancel</button>
+        <button class:danger-btn={deleteFiles} class:primary={!deleteFiles} onclick={() => { const l = removingDls!; removingDls = null; removeDownloads(l, deleteFiles) }}>
           {deleteFiles ? 'Remove and delete' : 'Remove'}
         </button>
       </div>
