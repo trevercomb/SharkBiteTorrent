@@ -39,6 +39,7 @@
   const connected = $derived(vpn.state === 'connected' || vpn.state === 'off')
   const sel = $derived(torrents.find(t => t.hash === selected))
   const selDls = $derived(downloads.filter(d => selectedDls.has(d.id)))
+  const finishedDls = $derived(downloads.filter(d => d.state === 'done'))
   const totalDown = $derived(torrents.reduce((s, t) => s + t.downRate, 0) + downloads.reduce((s, d) => s + d.rate, 0))
   const totalUp = $derived(torrents.reduce((s, t) => s + t.upRate, 0))
 
@@ -416,6 +417,10 @@
       <button onclick={() => sel && run(() => Pause(sel.hash))} disabled={!sel || sel.state === 'paused'}>Pause</button>
       <button onclick={() => { removing = sel ?? null; deleteFiles = false }} disabled={!sel || removingNow.has(sel.hash)}>Remove…</button>
     {/if}
+    {#if finishedDls.length > 0}
+      <button title="Take finished downloads off the list. Their files stay where they are."
+        onclick={() => removeDownloads(finishedDls, false)}>Clear finished ({finishedDls.length})</button>
+    {/if}
   </div>
 
   {#each torrents.filter(t => t.confirm) as t (t.hash)}
@@ -488,15 +493,7 @@
         <table class="downloads">
           <thead>
             <tr>
-              <th class="name">
-                Downloads
-                {#if downloads.some(d => d.state === 'done')}
-                  <button class="inline" title="Take finished downloads off this list. Their files stay where they are."
-                    onclick={() => removeDownloads(downloads.filter(d => d.state === 'done'), false)}>
-                    Clear finished ({downloads.filter(d => d.state === 'done').length})
-                  </button>
-                {/if}
-              </th><th>Size</th><th class="prog">Progress</th><th>Status</th>
+              <th class="name">Downloads</th><th>Size</th><th class="prog">Progress</th><th>Status</th>
               <th>Down</th><th>ETA</th>
             </tr>
           </thead>
