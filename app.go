@@ -54,7 +54,7 @@ type App struct {
 	limitUntil    time.Time
 	limitStrikes  int
 	limitTimer    *time.Timer
-	stopOnce     sync.Once  // stopAll
+	stopOnce      sync.Once // stopAll
 	// installing: an update is being installed (InstallUpdate); a second
 	// one at the same time (a double click) is refused.
 	installing atomic.Bool
@@ -95,6 +95,9 @@ type App struct {
 	sfvChecking  map[string]bool              // torrents whose .sfv is being checked
 	sfvResults   map[string]*engine.SFVStatus // .sfv results not yet in a saved scan record
 	verifyCtx    context.Context              // cancelled on disconnect; stops "Verify files"
+	dl           *downloads                   // direct downloads (downloads.go); guarded by mu
+	hostMu       sync.Mutex                   // guards host
+	host         *hostBrowser                 // the file-host browser window, while open (hostpages_*.go)
 }
 
 type VpnStatus struct {
@@ -201,6 +204,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.loadSettings()
 	a.loadSaved()
+	a.startDownloads()
 	a.noteUncleanExit()
 	a.handleArgs(os.Args[1:], true)
 	if !storeBuild {
@@ -260,6 +264,7 @@ func (a *App) stopAllNow(ctx context.Context) {
 		a.remoteOpMu.Lock()
 		a.stopRemote()
 		a.remoteOpMu.Unlock()
+		a.stopDownloads()
 		a.disconnect()
 	}()
 	select {
@@ -1486,6 +1491,7 @@ func (a *App) SaveSettings(s Settings) error {
 	if eng != nil {
 		eng.SetLimits(s.DownLimitKB*1024, s.UpLimitKB*1024)
 	}
+	a.setDownloadLimit(s.DownLimitKB)
 	vpnChanged := old.VpnProvider != s.VpnProvider ||
 		(s.VpnProvider == "custom" && old.ForwardedPort != s.ForwardedPort) ||
 		(s.VpnProvider == "account" && (old.AccountProvider != s.AccountProvider || old.AccountRegion != s.AccountRegion))

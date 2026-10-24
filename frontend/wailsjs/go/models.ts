@@ -1,3 +1,38 @@
+export namespace ddl {
+	
+	export class Status {
+	    id: string;
+	    name: string;
+	    dir: string;
+	    page: string;
+	    size: number;
+	    have: number;
+	    rate: number;
+	    state: string;
+	    error: string;
+	    offline: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.dir = source["dir"];
+	        this.page = source["page"];
+	        this.size = source["size"];
+	        this.have = source["have"];
+	        this.rate = source["rate"];
+	        this.state = source["state"];
+	        this.error = source["error"];
+	        this.offline = source["offline"];
+	    }
+	}
+
+}
+
 export namespace engine {
 	
 	export class FileStatus {
@@ -248,6 +283,24 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class AddLinksResult {
+	    torrents: number;
+	    files: number;
+	    pages: number;
+	    errors: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AddLinksResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.torrents = source["torrents"];
+	        this.files = source["files"];
+	        this.pages = source["pages"];
+	        this.errors = source["errors"];
+	    }
 	}
 	export class DownloadedUpdate {
 	    path: string;
@@ -675,6 +728,29 @@ export namespace main {
 	        this.port = source["port"];
 	        this.warning = source["warning"];
 	        this.error = source["error"];
+	    }
+	}
+
+}
+
+export namespace paste {
+	
+	export class Link {
+	    url: string;
+	    host: string;
+	    name: string;
+	    kind: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Link(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.host = source["host"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
 	    }
 	}
 

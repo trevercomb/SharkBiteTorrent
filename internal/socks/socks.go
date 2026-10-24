@@ -25,7 +25,10 @@ type Server struct {
 	// NoAuth accepts clients without a password, for Chromium (WebView2),
 	// which can't log in to a SOCKS proxy. Only for a short-lived listener.
 	NoAuth bool
-	Dial   Dialer
+	// Allow, if set, is asked about each client before anything else (the
+	// browser window's proxy only serves the app's own WebView2 processes).
+	Allow func(net.Conn) bool
+	Dial  Dialer
 
 	// Requests counts CONNECT requests from clients that logged in, so the
 	// app can confirm a search server really sends its traffic through here.
@@ -96,6 +99,9 @@ func (s *Server) handle(c net.Conn) {
 	s.track(c, true)
 	defer s.track(c, false)
 	defer c.Close()
+	if s.Allow != nil && !s.Allow(c) {
+		return
+	}
 
 	c.SetDeadline(time.Now().Add(30 * time.Second))
 	target, err := s.negotiate(c)
