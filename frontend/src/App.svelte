@@ -5,10 +5,12 @@
     GetVpnStatus, ListTorrents, AddMagnet, PickTorrentFile, GetSettings,
     Pause, Resume, Remove, Reconnect, OpenFolder, ChooseDownloadDir,
     InstallUpdate, DownloadUpdate, SkipUpdate, OpenURL, VerifyTorrent, StartTorrent,
+    ListDownloads, PauseDownload, ResumeDownload, RemoveDownload, GetNewLink, OpenDownloadFolder,
   } from '../wailsjs/go/main/App.js'
   import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js'
-  import type { engine, main } from '../wailsjs/go/models'
+  import type { ddl, engine, main } from '../wailsjs/go/models'
   import FilesPanel from './FilesPanel.svelte'
+  import PasteLinks from './PasteLinks.svelte'
   import ReleaseNotes from './ReleaseNotes.svelte'
   import SearchView from './SearchView.svelte'
   import Settings from './Settings.svelte'
@@ -25,11 +27,17 @@
   let searching = $state(false) // the search view replaces the torrent list
   let removing = $state<engine.Status | null>(null)
   let deleteFiles = $state(false)
+  // Direct downloads ("Paste links"), listed above the torrents.
+  let downloads = $state<ddl.Status[]>([])
+  let selectedDl = $state<string | null>(null)
+  let showPaste = $state(false)
+  let removingDl = $state<ddl.Status | null>(null)
 
   // "off" is the user's explicit No VPN choice; the engine runs either way.
   const connected = $derived(vpn.state === 'connected' || vpn.state === 'off')
   const sel = $derived(torrents.find(t => t.hash === selected))
-  const totalDown = $derived(torrents.reduce((s, t) => s + t.downRate, 0))
+  const selDl = $derived(downloads.find(d => d.id === selectedDl))
+  const totalDown = $derived(torrents.reduce((s, t) => s + t.downRate, 0) + downloads.reduce((s, d) => s + d.rate, 0))
   const totalUp = $derived(torrents.reduce((s, t) => s + t.upRate, 0))
 
   async function refresh() {
@@ -37,6 +45,8 @@
       vpn = await GetVpnStatus()
       torrents = await ListTorrents()
       if (selected && !torrents.some(t => t.hash === selected)) selected = null
+      downloads = await ListDownloads()
+      if (selectedDl && !downloads.some(d => d.id === selectedDl)) selectedDl = null
     } catch (e) {
       error = String(e)
     }
@@ -169,6 +179,7 @@
   function openMenu(e: MouseEvent, t: engine.Status) {
     e.preventDefault()
     selected = t.hash
+    selectedDl = null
     // Keep the menu inside the window.
     const w = 170, h = 120
     menu = {
@@ -185,7 +196,10 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') menu = null
+    if (e.key === 'Escape') {
+      menu = null
+      dlMenu = null
+    }
   }
 
   // Torrents being removed right now: shown as such, and not removable twice.
@@ -229,6 +243,51 @@
     if (startingNow.has(t.hash)) return 'Starting…'
     if (t.confirm && t.state === 'paused') return 'Waiting for Start'
     return stateLabel[t.state] ?? t.state
+  }
+
+  function dlStatus(d: ddl.Status): string {
+    if (removingNow.has(d.id)) return 'Removing…'
+    if (d.state === 'running') return d.offline ? 'Waiting for the VPN' : 'Downloading'
+    if (d.state === 'needsLink') return '⚠ Needs a new link'
+    if (d.state === 'failed') return '⚠ Failed'
+    return dlLabel[d.state] ?? d.state
+  }
+  const dlLabel: Record<string, string> = { queued: 'Queued', paused: 'Paused', done: 'Done' }
+
+  function dlEta(d: ddl.Status): string {
+    if (d.state !== 'running' || d.rate <= 0 || d.size <= 0) return '–'
+    return duration(Math.round((d.size - d.have) / d.rate))
+  }
+
+  const dlProgress = (d: ddl.Status) => (d.size > 0 ? d.have / d.size : d.state === 'done' ? 1 : 0)
+
+  function selectDownload(id: string) {
+    selectedDl = id
+    selected = null
+  }
+
+  async function removeDownload(id: string, files: boolean) {
+    if (removingNow.has(id)) return
+    removingNow = new Set([...removingNow, id])
+    if (selectedDl === id) selectedDl = null
+    await run(() => RemoveDownload(id, files))
+    removingNow = new Set([...removingNow].filter(h => h !== id))
+  }
+
+  // Right-click menu on a download row.
+  let dlMenu = $state<{ x: number; y: number; d: ddl.Status } | null>(null)
+
+  function openDlMenu(e: MouseEvent, d: ddl.Status) {
+    e.preventDefault()
+    selectDownload(d.id)
+    const w = 190, h = 140
+    dlMenu = { x: Math.min(e.clientX, window.innerWidth - w - 4), y: Math.min(e.clientY, window.innerHeight - h - 4), d }
+  }
+
+  function dlMenuAction(fn: (d: ddl.Status) => Promise<unknown>) {
+    const d = dlMenu!.d
+    dlMenu = null
+    run(() => fn(d))
   }
 
   const stateLabel: Record<string, string> = {
@@ -293,13 +352,20 @@
       <button class="primary" type="submit" disabled={!connected || !magnet.trim() || adding > 0}>{adding > 0 ? 'Adding…' : 'Add'}</button>
     </form>
     <button onclick={() => runAdding(PickTorrentFile)} disabled={!connected || adding > 0}>Open .torrent…</button>
+    <button onclick={() => (showPaste = true)} disabled={!connected} title="Download every link in some text, a page or a paste, through the VPN">Paste links…</button>
     <button class:active={searching} onclick={() => (searching = !searching)} disabled={!connected}>
       {searching ? '← Torrents' : 'Search'}
     </button>
     <span class="sep"></span>
-    <button onclick={() => sel && run(() => Resume(sel.hash, (sel.warnings ?? []).length))} disabled={!sel || sel.state !== 'paused'}>Resume</button>
-    <button onclick={() => sel && run(() => Pause(sel.hash))} disabled={!sel || sel.state === 'paused'}>Pause</button>
-    <button onclick={() => { removing = sel ?? null; deleteFiles = false }} disabled={!sel || removingNow.has(sel.hash)}>Remove…</button>
+    {#if selDl}
+      <button onclick={() => run(() => ResumeDownload(selDl.id))} disabled={selDl.state !== 'paused' && selDl.state !== 'failed'}>Resume</button>
+      <button onclick={() => run(() => PauseDownload(selDl.id))} disabled={selDl.state !== 'running' && selDl.state !== 'queued'}>Pause</button>
+      <button onclick={() => { removingDl = selDl ?? null; deleteFiles = false }} disabled={removingNow.has(selDl.id)}>Remove…</button>
+    {:else}
+      <button onclick={() => sel && run(() => Resume(sel.hash, (sel.warnings ?? []).length))} disabled={!sel || sel.state !== 'paused'}>Resume</button>
+      <button onclick={() => sel && run(() => Pause(sel.hash))} disabled={!sel || sel.state === 'paused'}>Pause</button>
+      <button onclick={() => { removing = sel ?? null; deleteFiles = false }} disabled={!sel || removingNow.has(sel.hash)}>Remove…</button>
+    {/if}
   </div>
 
   {#each torrents.filter(t => t.confirm) as t (t.hash)}
@@ -368,15 +434,43 @@
   {:else}
   <main class:split={!!sel}>
     <div class="list">
-      {#if torrents.length === 0}
+      {#if downloads.length > 0}
+        <table class="downloads">
+          <thead>
+            <tr>
+              <th class="name">Downloads</th><th>Size</th><th class="prog">Progress</th><th>Status</th>
+              <th>Down</th><th>ETA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each downloads as d (d.id)}
+              <tr class:selected={d.id === selectedDl} onclick={() => selectDownload(d.id)} oncontextmenu={e => openDlMenu(e, d)}>
+                <td class="name" title={d.name}>{d.name || 'Starting…'}</td>
+                <td>{d.size > 0 ? bytes(d.size) : '–'}</td>
+                <td class="prog">
+                  <div class="bar" class:seeding={d.state === 'done'} class:paused={d.state === 'paused'}><div style="width:{(dlProgress(d) * 100).toFixed(1)}%"></div></div>
+                  <span>{(dlProgress(d) * 100).toFixed(1)}%</span>
+                </td>
+                <td class:warn={d.state === 'needsLink' || d.state === 'failed'} title={d.error}>
+                  {dlStatus(d)}
+                  {#if d.state === 'needsLink'}<button class="inline" onclick={e => { e.stopPropagation(); run(() => GetNewLink(d.id)) }}>Get a new link</button>{/if}
+                </td>
+                <td>{rate(d.rate)}</td>
+                <td>{dlEta(d)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+      {#if torrents.length === 0 && downloads.length === 0}
         <div class="empty">
           {#if connected}
-            No torrents yet. Paste a magnet link, open a .torrent file, or drop one on this window.
+            No torrents yet. Paste a magnet link, open a .torrent file, or drop one on this window. To download every link in some text or a page, use Paste links.
           {:else}
             Waiting for the VPN. Nothing will download until the tunnel is up.
           {/if}
         </div>
-      {:else}
+      {:else if torrents.length > 0}
         <table>
           <thead>
             <tr>
@@ -388,7 +482,7 @@
             {#each torrents as t (t.hash)}
               <tr
                 class:selected={t.hash === selected}
-                onclick={() => (selected = t.hash)}
+                onclick={() => { selected = t.hash; selectedDl = null }}
                 oncontextmenu={e => openMenu(e, t)}
               >
                 <td class="name" title={t.name}>
@@ -454,6 +548,49 @@
     >Verify files</button>
     <div class="menu-sep"></div>
     <button role="menuitem" onclick={() => { removing = menu!.t; deleteFiles = false; menu = null }}>Remove…</button>
+  </div>
+{/if}
+
+{#if dlMenu}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="menu-catcher" onclick={() => (dlMenu = null)} oncontextmenu={e => { e.preventDefault(); dlMenu = null }}></div>
+  <div class="menu" role="menu" style="left:{dlMenu.x}px; top:{dlMenu.y}px">
+    <button role="menuitem" onclick={() => dlMenuAction(d => OpenDownloadFolder(d.id))}>{dlMenu.d.state === 'done' ? 'Show file' : 'Show folder'}</button>
+    {#if dlMenu.d.state === 'paused' || dlMenu.d.state === 'failed'}
+      <button role="menuitem" onclick={() => dlMenuAction(d => ResumeDownload(d.id))}>{dlMenu.d.state === 'failed' ? 'Try again' : 'Resume'}</button>
+    {:else if dlMenu.d.state === 'running' || dlMenu.d.state === 'queued'}
+      <button role="menuitem" onclick={() => dlMenuAction(d => PauseDownload(d.id))}>Pause</button>
+    {/if}
+    {#if dlMenu.d.page && dlMenu.d.state !== 'done'}
+      <button role="menuitem" onclick={() => dlMenuAction(d => GetNewLink(d.id))}>Get a new link</button>
+    {/if}
+    <div class="menu-sep"></div>
+    <button role="menuitem" onclick={() => { removingDl = dlMenu!.d; deleteFiles = false; dlMenu = null }}>Remove…</button>
+  </div>
+{/if}
+
+{#if showPaste}
+  <PasteLinks onClose={() => (showPaste = false)} onDone={msg => { notice = msg; refresh() }} />
+{/if}
+
+{#if removingDl}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="backdrop" onclick={() => (removingDl = null)}>
+    <div class="confirm" role="dialog" aria-modal="true" tabindex="-1" onclick={e => e.stopPropagation()}>
+      <h3>Remove download?</h3>
+      <p class="tname">{removingDl.name || 'Unnamed download'}</p>
+      <label class="check">
+        <input type="checkbox" bind:checked={deleteFiles} />
+        <span>{removingDl.state === 'done' ? 'Also delete the file' : 'Also delete what was downloaded so far'}</span>
+      </label>
+      {#if deleteFiles}<p class="danger">The file is deleted permanently, not moved to the Recycle Bin.</p>{/if}
+      <div class="actions">
+        <button onclick={() => (removingDl = null)}>Cancel</button>
+        <button class:danger-btn={deleteFiles} class:primary={!deleteFiles} onclick={() => { const d = removingDl!; removingDl = null; removeDownload(d.id, deleteFiles) }}>
+          {deleteFiles ? 'Remove and delete' : 'Remove'}
+        </button>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -576,6 +713,8 @@
   .bar.seeding div { background: var(--ok); }
   .bar.paused div { background: var(--muted); }
   td.prog span { width: 44px; text-align: right; color: var(--muted); font-size: 12px; }
+  table.downloads { margin-bottom: 6px; }
+  .inline { margin-left: 8px; padding: 1px 8px; font-size: 12px; }
 
   footer {
     display: flex; align-items: center; gap: 8px; padding: 8px 14px;
