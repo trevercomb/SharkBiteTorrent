@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"sharkbite/internal/browser"
+	"sharkbite/internal/paste"
 	"sharkbite/internal/socks"
 	"sharkbite/internal/tunnel"
 	"sharkbite/internal/warp"
@@ -63,12 +64,33 @@ type msg struct {
 const (
 	wmSize    = 0x0005
 	wmDestroy = 0x0002
+	wmApp     = 0x8000
 )
 
-var chromium *edge.Chromium
+var (
+	chromium *edge.Chromium
+	hwndMain uintptr
+	uiQueue  = make(chan func(), 16)
+	pPost    = user32.NewProc("PostMessageW")
+)
+
+// onUI runs fn on the window's thread, where WebView2 must be called.
+func onUI(fn func()) {
+	uiQueue <- fn
+	pPost.Call(hwndMain, wmApp, 0, 0)
+}
 
 func wndProc(hwnd windows.Handle, m uint32, w, l uintptr) uintptr {
 	switch m {
+	case wmApp:
+		for {
+			select {
+			case fn := <-uiQueue:
+				fn()
+			default:
+				return 0
+			}
+		}
 	case wmSize:
 		if chromium != nil {
 			chromium.Resize()
@@ -84,10 +106,9 @@ func wndProc(hwnd windows.Handle, m uint32, w, l uintptr) uintptr {
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Println("usage: browsercheck <url>")
+		fmt.Println("usage: browsercheck <page, or paste/page of links>")
 		os.Exit(2)
 	}
-	target := os.Args[1]
 
 	dir, _ := os.UserConfigDir()
 	acc, err := warp.LoadOrRegister(filepath.Join(dir, "SharkBiteTorrent", "warp.json"))
@@ -102,6 +123,28 @@ func main() {
 		os.Exit(1)
 	}
 	defer tun.Close()
+
+	// A paste or page listing file-host pages: visit each. Anything else
+	// (e.g. a host page that's blocked to Go): just that page.
+	pages := []string{os.Args[1]}
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		text, err := paste.Read(ctx, tun.HTTPClient(), os.Args[1])
+		cancel()
+		var found []string
+		if err == nil {
+			for _, l := range paste.Links(text) {
+				if l.Kind == paste.Page {
+					found = append(found, l.URL)
+				}
+			}
+		}
+		if len(found) > 0 {
+			pages = found
+		}
+		fmt.Printf("[pages] %d to visit\n", len(pages))
+	}
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fmt.Println(err)
@@ -130,6 +173,7 @@ func main() {
 	hwnd, _, _ := pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(title)), wsOverlappedWindow,
 		cwUseDefault, cwUseDefault, 1100, 850, 0, 0, inst, 0)
 	pShowWindow.Call(hwnd, 5)
+	hwndMain = hwnd
 
 	data, _ := os.MkdirTemp("", "sbt-browsercheck-")
 	defer os.RemoveAll(data)
@@ -145,9 +189,15 @@ func main() {
 	}
 	chromium.SetErrorCallback(func(err error) { fmt.Println("[webview error]", err) })
 
+	loaded := make(chan string, 16)
+	gotDownload := make(chan string, 16)
 	chromium.NavigationCompletedCallback = func(sender *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) {
 		src, _ := sender.GetSource()
 		fmt.Println("[navigated]", trim(src))
+		select {
+		case loaded <- src:
+		default:
+		}
 	}
 
 	chromium.Embed(hwnd)
@@ -164,9 +214,13 @@ func main() {
 	fmt.Println("[browser] download hook:", browser.OnDownload(chromium, func(d browser.Download) browser.DownloadChoice {
 		fmt.Printf("[download] %s\n  type %s, size %d, disposition %q\n", trim(d.URL), d.MimeType, d.Size, d.Disposition)
 		go tryGo(tun, d.URL, ua)
+		select {
+		case gotDownload <- d.Disposition:
+		default:
+		}
 		return browser.DownloadChoice{Cancel: true}
 	}))
-	chromium.Navigate(target)
+	go visit(pages, loaded, gotDownload)
 
 	var m msg
 	for {
@@ -177,6 +231,53 @@ func main() {
 		pTranslate.Call(uintptr(unsafe.Pointer(&m)))
 		pDispatch.Call(uintptr(unsafe.Pointer(&m)))
 	}
+}
+
+// clickScript clicks the page's most prominent visible "download" link or
+// button: a plain click() from a script, like a userscript would make.
+const clickScript = `(() => {
+	const els = [...document.querySelectorAll('a, button, input[type=button], input[type=submit]')]
+		.filter(e => /download/i.test(e.textContent || e.value || '') && e.offsetParent !== null);
+	const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
+	els.sort((a, b) => area(b) - area(a));
+	if (els.length) els[0].click();
+})()`
+
+// visit loads each page in turn, clicks its download button until the page
+// starts a download (the first click may only open an ad, which is blocked),
+// then moves on.
+func visit(pages []string, loaded, gotDownload chan string) {
+	start := time.Now()
+	got := 0
+	for i, p := range pages {
+		fmt.Printf("[visit %d/%d] %s\n", i+1, len(pages), trim(p))
+		for len(loaded) > 0 {
+			<-loaded
+		}
+		onUI(func() { chromium.Navigate(p) })
+		select {
+		case <-loaded:
+		case <-time.After(30 * time.Second):
+			fmt.Println("[visit] page didn't load in 30 s")
+			continue
+		}
+		time.Sleep(1500 * time.Millisecond) // let the page's scripts set up
+		ok := false
+		for try := 1; try <= 6 && !ok; try++ {
+			onUI(func() { chromium.Eval(clickScript) })
+			select {
+			case <-gotDownload:
+				fmt.Printf("[visit] download caught after %d script click(s)\n", try)
+				ok = true
+				got++
+			case <-time.After(3 * time.Second):
+			}
+		}
+		if !ok {
+			fmt.Println("[visit] no download after 6 script clicks")
+		}
+	}
+	fmt.Printf("[done] %d of %d pages gave a download, in %s\n", got, len(pages), time.Since(start).Round(time.Second))
 }
 
 // tryGo fetches the first MB of a download the window started, with Go's own
