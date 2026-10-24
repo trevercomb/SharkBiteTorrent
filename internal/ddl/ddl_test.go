@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -354,4 +355,31 @@ func TestOffline(t *testing.T) {
 	down.Store(false)
 	waitState(t, m, "a", Done)
 	checkFile(t, filepath.Join(dir, "o.bin"), data)
+}
+
+// A connection that stops sending without closing is dropped and retried.
+func TestStall(t *testing.T) {
+	defer func(v time.Duration) { stallTimeout = v }(stallTimeout)
+	stallTimeout = 200 * time.Millisecond
+	data := testData(t, 200<<10)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 2 { // the first real request (after the probe) hangs halfway
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.Write(data[:len(data)/2])
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	m := newManager(nil)
+	m.Add(Spec{ID: "a", URL: srv.URL + "/x", Dir: dir, Name: "s.bin"})
+	waitState(t, m, "a", Done)
+	checkFile(t, filepath.Join(dir, "s.bin"), data)
+	if calls.Load() < 3 {
+		t.Errorf("only %d requests: the stalled one wasn't retried", calls.Load())
+	}
 }

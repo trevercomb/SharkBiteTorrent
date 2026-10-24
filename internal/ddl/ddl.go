@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -121,6 +122,9 @@ var minSegment int64 = 8 << 20 // don't split files into pieces smaller than thi
 
 // offlineWait is how long a download waits before checking the connection again (tests lower it).
 var offlineWait = 5 * time.Second
+
+// stallTimeout drops a connection that has sent nothing for this long (tests lower it).
+var stallTimeout = time.Minute
 
 const (
 	syncEvery    = 5 * time.Second
@@ -617,8 +621,15 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 				return err
 			}
 		}
-		resp, err := m.request(ctx, url, pos, seg.End)
+		// A connection that stops sending without closing is dropped after
+		// stallTimeout and tried again.
+		reqCtx, cancelReq := context.WithCancel(ctx)
+		var stalled atomic.Bool
+		stall := time.AfterFunc(stallTimeout, func() { stalled.Store(true); cancelReq() })
+		resp, err := m.request(reqCtx, url, pos, seg.End)
 		if errors.Is(err, ErrOffline) {
+			stall.Stop()
+			cancelReq()
 			if err := m.waitOnline(ctx, j); err != nil {
 				return err
 			}
@@ -626,8 +637,13 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 		}
 		m.setOffline(j, false)
 		if err == nil {
-			err = m.copySegment(ctx, j, f, i, resp, pos, seg.End, buf)
+			err = m.copySegment(reqCtx, j, f, i, resp, pos, seg.End, buf, stall)
 			resp.Body.Close()
+		}
+		stall.Stop()
+		cancelReq()
+		if err != nil && ctx.Err() == nil && stalled.Load() {
+			err = errors.New("the connection stalled")
 		}
 		switch {
 		case err == nil:
@@ -652,7 +668,7 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 	}
 }
 
-func (m *Manager) copySegment(ctx context.Context, j *job, f *os.File, i int, resp *http.Response, pos, end int64, buf []byte) error {
+func (m *Manager) copySegment(ctx context.Context, j *job, f *os.File, i int, resp *http.Response, pos, end int64, buf []byte, stall *time.Timer) error {
 	if pos > 0 || end >= 0 {
 		if resp.StatusCode != http.StatusPartialContent {
 			if pos > 0 {
@@ -670,13 +686,15 @@ func (m *Manager) copySegment(ctx context.Context, j *job, f *os.File, i int, re
 		if want == 0 {
 			return nil
 		}
-		n, rerr := io.ReadFull(resp.Body, buf[:want])
+		n, rerr := resp.Body.Read(buf[:want])
 		if n > 0 {
+			stall.Stop() // waiting for the speed limit isn't a stall
 			if m.Limiter != nil {
 				if err := waitN(ctx, m.Limiter, n); err != nil {
 					return err
 				}
 			}
+			stall.Reset(stallTimeout)
 			if _, err := f.WriteAt(buf[:n], pos); err != nil {
 				return err
 			}
@@ -687,7 +705,7 @@ func (m *Manager) copySegment(ctx context.Context, j *job, f *os.File, i int, re
 		}
 		switch {
 		case rerr == nil:
-		case errors.Is(rerr, io.EOF), errors.Is(rerr, io.ErrUnexpectedEOF):
+		case errors.Is(rerr, io.EOF):
 			if end < 0 {
 				return nil // unknown size: the end of the body is the end of the file
 			}
