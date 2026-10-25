@@ -218,17 +218,22 @@ func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
 	a.mu.Lock()
 	dir := a.settings.DownloadDir
 	a.mu.Unlock()
-	// A link that looks like a file by its name may be a file host's page
-	// (many put the file name in their page addresses): ask first.
+	// Names can mislead both ways: a link that looks like a file may be a
+	// file host's page (many put the file name in their page addresses), and
+	// one that doesn't may be a file (a .txt, or a download script). Ask
+	// each one for its first byte; only real files are downloaded directly.
 	isFile := make(map[string]bool)
 	var wg sync.WaitGroup
 	var isFileMu sync.Mutex
+	sem := make(chan struct{}, 6)
 	for _, l := range links {
-		if l.Kind == paste.File {
+		if l.Kind == paste.File || l.Kind == paste.Page {
 			wg.Add(1)
 			go func(u string) {
 				defer wg.Done()
+				sem <- struct{}{}
 				ok := a.servesFile(u)
+				<-sem
 				isFileMu.Lock()
 				isFile[u] = ok
 				isFileMu.Unlock()
@@ -239,8 +244,11 @@ func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
 
 	var pages []hostPage
 	for _, l := range links {
-		if l.Kind == paste.File && !isFile[l.URL] {
+		switch {
+		case l.Kind == paste.File && !isFile[l.URL]:
 			l.Kind = paste.Page
+		case l.Kind == paste.Page && isFile[l.URL]:
+			l.Kind = paste.File
 		}
 		var err error
 		switch l.Kind {

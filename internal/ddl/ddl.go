@@ -142,6 +142,7 @@ func (m *Manager) Add(s Spec) error {
 	if s.ID == "" || s.URL == "" || s.Dir == "" {
 		return errors.New("download needs an ID, a link and a folder")
 	}
+	defer m.changed() // saved right away, not only once it has made progress (after the unlock below)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.jobs == nil {
