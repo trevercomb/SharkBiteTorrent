@@ -29,7 +29,8 @@ jobs:
       - name: Install the Anthropic SDK
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check anthropic==2.1.0
+          # Every package pinned with its hash: this job gets the API key.
+          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check --require-hashes --only-binary=:all: -r scripts/audit-requirements.txt
       - name: Audit
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
