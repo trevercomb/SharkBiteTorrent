@@ -1,8 +1,12 @@
 <script lang="ts">
-  import { ReadPaste, AddLinks } from '../wailsjs/go/main/App.js'
-  import type { paste } from '../wailsjs/go/models'
+  import { ReadPaste, AddLinksTo } from '../wailsjs/go/main/App.js'
+  import type { main, paste } from '../wailsjs/go/models'
 
-  let { onClose, onDone }: { onClose: () => void; onDone: (summary: string) => void } = $props()
+  let { onClose, onDone, askChoice }: {
+    onClose: () => void
+    onDone: (summary: string) => void
+    askChoice: (what: string) => Promise<main.AddChoice | null> // where to save them (App.svelte)
+  } = $props()
 
   let input = $state('')
   let links = $state<paste.Link[] | null>(null)
@@ -41,10 +45,13 @@
   }
 
   async function download() {
+    const chosen = links!.filter(l => picked.has(l.url))
+    const c = await askChoice(chosen.length === 1 ? show(chosen[0]) : `${chosen.length} links`)
+    if (!c) return
     busy = true
     error = ''
     try {
-      const res = await AddLinks(links!.filter(l => picked.has(l.url)))
+      const res = await AddLinksTo(chosen, c)
       const parts = []
       if (res.files) parts.push(`${res.files} file${res.files > 1 ? 's' : ''} downloading`)
       if (res.torrents) parts.push(`${res.torrents} torrent${res.torrents > 1 ? 's' : ''} added`)

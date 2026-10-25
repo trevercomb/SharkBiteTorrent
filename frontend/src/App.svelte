@@ -1,16 +1,18 @@
 <script lang="ts">
   import InstallCommand from './InstallCommand.svelte'
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import {
-    GetVpnStatus, ListTorrents, AddMagnet, PickTorrentFile, GetSettings,
+    GetVpnStatus, ListTorrents, GetSettings,
     Pause, Resume, Remove, Reconnect, OpenFolder, ChooseDownloadDir,
     InstallUpdate, DownloadUpdate, SkipUpdate, OpenURL, VerifyTorrent, StartTorrent,
     ListDownloads, PauseDownload, ResumeDownload, RemoveDownload, GetNewLink, OpenDownloadFolder,
+    AddMagnetTo, ChooseTorrentFiles, AddTorrentFiles, StartTorrentIn, ChooseDirectory,
   } from '../wailsjs/go/main/App.js'
   import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js'
   import type { engine, main } from '../wailsjs/go/models'
   import FilesPanel from './FilesPanel.svelte'
   import PasteLinks from './PasteLinks.svelte'
+  import AddDialog from './AddDialog.svelte'
   import ReleaseNotes from './ReleaseNotes.svelte'
   import SearchView from './SearchView.svelte'
   import Settings from './Settings.svelte'
@@ -66,6 +68,8 @@
     const off = EventsOn('error', (msg: string) => (error = msg))
     const offUpdate = EventsOn('update-available', (info: main.UpdateInfo) => (update = info))
     const offNotice = EventsOn('notice', (msg: string) => (notice = msg))
+    // .torrent files dropped on the window, when the user wants to be asked first.
+    const offAskAdd = EventsOn('ask-add', (paths: string[]) => addTorrentFiles(paths))
     // Wails only attaches its window drop listeners when OnFileDrop is called
     // from JS. Dropped file paths are then handled in Go (runtime.OnFileDrop in
     // app.go), so the JS callback has nothing to do. useDropTarget=false: the
@@ -84,6 +88,7 @@
       off()
       offUpdate()
       offNotice()
+      offAskAdd()
     }
   })
 
@@ -109,13 +114,41 @@
     }
   }
 
-  function addMagnet(ev: SubmitEvent) {
+  // Where to save what's being added. With "Ask where to save each
+  // download" on, the dialog asks (null: cancelled); otherwise the default.
+  let asking = $state<{ what: string; resolve: (c: main.AddChoice | null) => void } | null>(null)
+  function askChoice(what: string): Promise<main.AddChoice | null> {
+    if (!settings?.askSaveLocation) return Promise.resolve({ dir: '', paused: false } as main.AddChoice)
+    return new Promise(resolve => (asking = { what, resolve }))
+  }
+  function answer(c: main.AddChoice | null) {
+    const a = asking!
+    asking = null
+    a.resolve(c)
+    loadSettings() // recent folders, or "don't ask again"
+  }
+
+  const magnetName = (link: string) =>
+    new URLSearchParams(link.slice(link.indexOf('?') + 1)).get('dn') || 'Magnet link'
+  const plural = (n: number, one: string) => `${n} ${one}${n > 1 ? 's' : ''}`
+
+  async function addMagnet(ev: SubmitEvent) {
     ev.preventDefault()
-    if (!magnet.trim()) return
+    const link = magnet.trim()
+    if (!link) return
+    const c = await askChoice(magnetName(link))
+    if (!c) return
     runAdding(async () => {
-      await AddMagnet(magnet)
+      await AddMagnetTo(link, c)
       magnet = ''
     })
+  }
+
+  async function addTorrentFiles(paths: string[]) {
+    if (paths.length === 0) return
+    const name = (p: string) => p.split(/[\\/]/).pop()!
+    const c = await askChoice(paths.length === 1 ? name(paths[0]) : plural(paths.length, 'torrent file'))
+    if (c) runAdding(() => AddTorrentFiles(paths, c))
   }
 
   // Drag and drop. Files (.torrent) are handled by Wails + Go; magnet links
@@ -142,8 +175,10 @@
     const links = text.split(/\s+/).filter(l => l.startsWith('magnet:'))
     if (links.length === 0) return
     e.preventDefault()
-    run(async () => {
-      for (const l of links) await AddMagnet(l)
+    askChoice(links.length === 1 ? magnetName(links[0]) : plural(links.length, 'magnet link')).then(c => {
+      if (c) run(async () => {
+        for (const l of links) await AddMagnetTo(l, c)
+      })
     })
   }
 
@@ -232,8 +267,24 @@
   async function startTorrent(hash: string) {
     if (startingNow.has(hash)) return
     startingNow = new Set([...startingNow, hash])
-    await run(() => StartTorrent(hash))
+    await run(() => StartTorrentIn(hash, bannerDir[hash] ?? ''))
     startingNow = new Set([...startingNow].filter(h => h !== hash))
+  }
+
+  // The folder picked in a torrent's "added from outside" banner ('' = default).
+  let bannerDir = $state<Record<string, string>>({})
+  let browsedDirs = $state<string[]>([])
+  const bannerDirs = $derived([...new Set([...browsedDirs, ...(settings?.recentDirs ?? [])])])
+  async function pickBannerDir(hash: string, el: HTMLSelectElement) {
+    let value = el.value
+    if (value === '?browse') {
+      const d = await ChooseDirectory(bannerDir[hash] || settings?.downloadDir || '')
+      if (d) browsedDirs = [d, ...browsedDirs.filter(x => x !== d)]
+      value = d || bannerDir[hash] || ''
+    }
+    bannerDir = { ...bannerDir, [hash]: value }
+    await tick()
+    el.value = value // back from "Browse…" if that was cancelled
   }
 
   function confirmRemove() {
@@ -422,7 +473,7 @@
       <input placeholder="Paste a magnet link…" bind:value={magnet} disabled={!connected} />
       <button class="primary" type="submit" disabled={!connected || !magnet.trim() || adding > 0}>{adding > 0 ? 'Adding…' : 'Add'}</button>
     </form>
-    <button onclick={() => runAdding(PickTorrentFile)} disabled={!connected || adding > 0}>Open .torrent…</button>
+    <button onclick={async () => addTorrentFiles(await ChooseTorrentFiles())} disabled={!connected || adding > 0}>Open .torrent…</button>
     <button onclick={() => (showPaste = true)} disabled={!connected} title="Download every link in some text, a page or a paste, through the VPN">Paste links…</button>
     <button class:active={searching} onclick={() => (searching = !searching)} disabled={!connected}>
       {searching ? '← Torrents' : 'Search'}
@@ -457,6 +508,14 @@
           <b>{t.name || 'unnamed torrent'}</b>{t.size ? ` (${bytes(t.size)})` : ''}. Nothing is downloaded or contacted until you start it.
           {#if (t.warnings ?? []).length > 0}<b class="warn">⚠ Some of its files look risky: {(t.warnings ?? []).map(w => w.reason).join(' ')}</b>{/if}
         </span>
+        <label class="saveto">
+          <span class="muted">Save to</span>
+          <select value={bannerDir[t.hash] ?? ''} onchange={e => pickBannerDir(t.hash, e.target as HTMLSelectElement)}>
+            <option value="">{settings?.downloadDir} (default)</option>
+            {#each bannerDirs.filter(d => d !== settings?.downloadDir) as d (d)}<option value={d}>{d}</option>{/each}
+            <option value="?browse">Browse…</option>
+          </select>
+        </label>
         <button class="primary" onclick={() => startTorrent(t.hash)} disabled={startingNow.has(t.hash)}>
           {startingNow.has(t.hash) ? 'Starting…' : 'Start'}
         </button>
@@ -506,7 +565,7 @@
 
   {#if searching}
     <main>
-      <SearchView onAdded={refresh} onError={e => (error = e)} onOpenSettings={() => (showSettings = true)} />
+      <SearchView onAdded={refresh} onError={e => (error = e)} onOpenSettings={() => (showSettings = true)} {askChoice} />
     </main>
   {:else}
   <main class:split={!!sel}>
@@ -659,7 +718,12 @@
 {/if}
 
 {#if showPaste}
-  <PasteLinks onClose={() => (showPaste = false)} onDone={msg => { notice = msg; refresh() }} />
+  <PasteLinks onClose={() => (showPaste = false)} onDone={msg => { notice = msg; refresh() }} {askChoice} />
+{/if}
+
+{#if asking}
+  <AddDialog what={asking.what} defaultDir={settings?.downloadDir ?? ''} recentDirs={settings?.recentDirs ?? []}
+    onConfirm={answer} onCancel={() => answer(null)} />
 {/if}
 
 {#if removingDls}
@@ -768,6 +832,8 @@
   }
   .update > span:first-child { flex: 1; min-width: 240px; }
   .update button { padding: 3px 10px; }
+  .saveto { display: flex; align-items: center; gap: 6px; }
+  .saveto select { max-width: 260px; }
   .update .close { background: none; border: none; }
   .update-notes { flex-basis: 100%; border-top: 1px solid rgba(79, 140, 255, 0.3); padding-top: 8px; }
   .update-notes .link { background: none; border: none; padding: 4px 0 0; color: var(--accent); text-decoration: underline; }

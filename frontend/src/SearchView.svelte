@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { GetSearchStatus, AutoDetectSearch, SearchTorrents, AddSearchResult, OpenURL } from '../wailsjs/go/main/App.js'
+  import { GetSearchStatus, AutoDetectSearch, SearchTorrents, AddSearchResultTo, OpenURL } from '../wailsjs/go/main/App.js'
   import type { main, search } from '../wailsjs/go/models'
   import { bytes } from './format'
 
-  let { onAdded, onError, onOpenSettings }: {
+  let { onAdded, onError, onOpenSettings, askChoice }: {
     onAdded: () => void
     onError: (e: string) => void
     onOpenSettings: () => void
+    askChoice: (what: string) => Promise<main.AddChoice | null> // where to save it (App.svelte)
   } = $props()
 
   let status = $state<main.SearchStatus | null>(null)
@@ -56,9 +57,11 @@
   async function add(r: search.Result) {
     const k = key(r)
     if (adding[k]) return
+    const c = await askChoice(r.title)
+    if (!c) return
     adding = { ...adding, [k]: 'adding' }
     try {
-      await AddSearchResult(r)
+      await AddSearchResultTo(r, c)
       adding = { ...adding, [k]: 'added' }
       onAdded()
     } catch (e) {

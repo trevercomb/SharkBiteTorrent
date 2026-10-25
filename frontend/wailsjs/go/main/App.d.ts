@@ -9,9 +9,17 @@ import {platform} from '../models';
 
 export function AddLinks(arg1:Array<paste.Link>):Promise<main.AddLinksResult>;
 
+export function AddLinksTo(arg1:Array<paste.Link>,arg2:main.AddChoice):Promise<main.AddLinksResult>;
+
 export function AddMagnet(arg1:string):Promise<void>;
 
+export function AddMagnetTo(arg1:string,arg2:main.AddChoice):Promise<void>;
+
 export function AddSearchResult(arg1:search.Result):Promise<void>;
+
+export function AddSearchResultTo(arg1:search.Result,arg2:main.AddChoice):Promise<void>;
+
+export function AddTorrentFiles(arg1:Array<string>,arg2:main.AddChoice):Promise<void>;
 
 export function AutoDetectSearch():Promise<main.SearchStatus>;
 
@@ -22,6 +30,8 @@ export function CheckSearchProxy():Promise<main.ProxyCheck>;
 export function ChooseDirectory(arg1:string):Promise<string>;
 
 export function ChooseDownloadDir():Promise<string>;
+
+export function ChooseTorrentFiles():Promise<Array<string>>;
 
 export function ConnectSearch(arg1:string,arg2:string):Promise<main.SearchStatus>;
 
@@ -113,6 +123,8 @@ export function ScanFully(arg1:string):Promise<void>;
 
 export function SearchTorrents(arg1:string,arg2:string):Promise<Array<search.Result>>;
 
+export function SetAskSaveLocation(arg1:boolean):Promise<void>;
+
 export function SetFilesWanted(arg1:string,arg2:Array<number>,arg3:boolean):Promise<void>;
 
 export function SetRemote(arg1:boolean,arg2:number):Promise<main.RemoteStatus>;
@@ -130,5 +142,7 @@ export function SkipUpdate(arg1:string):Promise<void>;
 export function StartRemotePairing(arg1:boolean):Promise<main.RemotePairing>;
 
 export function StartTorrent(arg1:string):Promise<void>;
+
+export function StartTorrentIn(arg1:string,arg2:string):Promise<void>;
 
 export function VerifyTorrent(arg1:string):Promise<void>;

@@ -249,6 +249,20 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class AddChoice {
+	    dir: string;
+	    paused: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AddChoice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.dir = source["dir"];
+	        this.paused = source["paused"];
+	    }
+	}
 	export class AddLinksResult {
 	    torrents: number;
 	    files: number;
@@ -574,6 +588,8 @@ export namespace main {
 	    updateChannel: string;
 	    scanDownloads: boolean;
 	    autoVerify: string;
+	    askSaveLocation: boolean;
+	    recentDirs?: string[];
 	    remoteEnabled: boolean;
 	    remotePort: number;
 	    remoteTailscale: boolean;
@@ -598,6 +614,8 @@ export namespace main {
 	        this.updateChannel = source["updateChannel"];
 	        this.scanDownloads = source["scanDownloads"];
 	        this.autoVerify = source["autoVerify"];
+	        this.askSaveLocation = source["askSaveLocation"];
+	        this.recentDirs = source["recentDirs"];
 	        this.remoteEnabled = source["remoteEnabled"];
 	        this.remotePort = source["remotePort"];
 	        this.remoteTailscale = source["remoteTailscale"];

@@ -209,15 +209,15 @@ type AddLinksResult struct {
 
 // AddLinks downloads the links the user picked: torrents into the torrent
 // list, files directly, and file-host pages through the browser window.
-func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
+func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) { return a.addLinks(links, AddChoice{}) }
+
+func (a *App) addLinks(links []paste.Link, choice AddChoice) (AddLinksResult, error) {
 	res := AddLinksResult{Errors: []string{}}
 	m, err := a.downloadManager()
 	if err != nil {
 		return res, err
 	}
-	a.mu.Lock()
-	dir := a.settings.DownloadDir
-	a.mu.Unlock()
+	dir := a.dirFor(choice)
 	// Names can mislead both ways: a link that looks like a file may be a
 	// file host's page (many put the file name in their page addresses), and
 	// one that doesn't may be a file (a .txt, or a download script). Ask
@@ -253,21 +253,21 @@ func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
 		var err error
 		switch l.Kind {
 		case paste.Magnet:
-			if err = a.addSource(l.URL); err == nil {
+			if err = a.addSourceTo(l.URL, false, choice); err == nil {
 				res.Torrents++
 			}
 		case paste.Torrent:
-			if err = a.addTorrentURL(l.URL); err == nil {
+			if err = a.addTorrentURL(l.URL, choice); err == nil {
 				res.Torrents++
 			}
 		case paste.File:
 			if err = ensureDownloadDir(dir); err == nil {
-				if err = m.Add(ddl.Spec{ID: newDownloadID(), URL: l.URL, Dir: dir, Name: l.Name}); err == nil {
+				if err = m.Add(ddl.Spec{ID: newDownloadID(), URL: l.URL, Dir: dir, Name: l.Name, Paused: choice.Paused}); err == nil {
 					res.Files++
 				}
 			}
 		default:
-			pages = append(pages, hostPage{URL: l.URL})
+			pages = append(pages, hostPage{URL: l.URL, Dir: dir, Paused: choice.Paused})
 		}
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", engine.Redact(l.URL), err))
@@ -283,6 +283,7 @@ func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
 			res.Pages = len(pages)
 		}
 	}
+	a.noteRecentDir(dir)
 	return res, nil
 }
 
@@ -312,7 +313,7 @@ func (a *App) servesFile(url string) bool {
 }
 
 // addTorrentURL fetches a .torrent file through the VPN and adds it.
-func (a *App) addTorrentURL(url string) error {
+func (a *App) addTorrentURL(url string, choice AddChoice) error {
 	hc, err := a.downloadClient()
 	if err != nil {
 		return err
@@ -344,7 +345,7 @@ func (a *App) addTorrentURL(url string) error {
 	if err != nil {
 		return err
 	}
-	return a.addSource(f.Name())
+	return a.addSourceTo(f.Name(), false, choice)
 }
 
 // addFromHost starts (or, for a page already being downloaded, continues
@@ -366,10 +367,11 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 	if _, params, err := mime.ParseMediaType(disposition); err == nil {
 		name = params["filename"]
 	}
-	a.mu.Lock()
-	dir := a.settings.DownloadDir
-	a.mu.Unlock()
-	if err := m.Add(ddl.Spec{ID: newDownloadID(), URL: link, Page: page.URL, Dir: dir, Name: name}); err != nil {
+	dir := page.Dir
+	if dir == "" {
+		dir = a.dirFor(AddChoice{})
+	}
+	if err := m.Add(ddl.Spec{ID: newDownloadID(), URL: link, Page: page.URL, Dir: dir, Name: name, Paused: page.Paused}); err != nil {
 		a.notifyError(err)
 	}
 }

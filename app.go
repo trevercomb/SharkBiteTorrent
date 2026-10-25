@@ -138,6 +138,12 @@ type Settings struct {
 	// during the download could have damaged them; "all": every download;
 	// "off": never.
 	AutoVerify string `json:"autoVerify"`
+	// AskSaveLocation: adding anything first asks where to save it and
+	// whether to start it now (addchoice.go).
+	AskSaveLocation bool `json:"askSaveLocation"`
+	// RecentDirs: other folders recently chosen there, newest first; changed
+	// as they're used, not through SaveSettings.
+	RecentDirs []string `json:"recentDirs,omitempty"`
 	// Remote control from phones on the home network (remote.go); changed
 	// through SetRemote, not SaveSettings.
 	RemoteEnabled   bool `json:"remoteEnabled"`
@@ -389,10 +395,18 @@ func (a *App) handleArgs(args []string, external bool) {
 	if a.isShuttingDown() {
 		return // see onSecondInstance
 	}
+	var torrents []string
 	for _, arg := range args {
-		if !strings.HasPrefix(arg, "magnet:") && !strings.EqualFold(filepath.Ext(arg), ".torrent") {
-			continue
+		if strings.HasPrefix(arg, "magnet:") || strings.EqualFold(filepath.Ext(arg), ".torrent") {
+			torrents = append(torrents, arg)
 		}
+	}
+	// Dropped by the user, who wants to choose where each download goes:
+	// the window asks first (external ones wait in their banner anyway).
+	if !external && a.askAdd(torrents) {
+		return
+	}
+	for _, arg := range torrents {
 		a.mu.Lock()
 		ready := a.eng != nil
 		if !ready {
@@ -987,6 +1001,12 @@ func (a *App) addSource(src string) error { return a.addSourceFrom(src, false) }
 // addSourceFrom adds a torrent; an external one waits paused for the user
 // (savedTorrent.Confirm).
 func (a *App) addSourceFrom(src string, external bool) error {
+	return a.addSourceTo(src, external, AddChoice{})
+}
+
+// addSourceTo adds a torrent where the user chose (AddChoice; the default
+// download folder if none), started or paused.
+func (a *App) addSourceTo(src string, external bool, choice AddChoice) error {
 	var pending savedTorrent // what an external source says about itself
 	if strings.HasPrefix(src, "magnet:") {
 		m, err := metainfo.ParseMagnetUri(src)
@@ -1021,9 +1041,7 @@ func (a *App) addSourceFrom(src string, external bool) error {
 		}
 		src = dst
 	}
-	a.mu.Lock()
-	dir := a.settings.DownloadDir
-	a.mu.Unlock()
+	dir := a.dirFor(choice)
 	if external {
 		// Only remembered until the user presses Start (StartTorrent).
 		a.mu.Lock()
@@ -1054,7 +1072,14 @@ func (a *App) addSourceFrom(src string, external bool) error {
 	if err != nil {
 		return err
 	}
-	return a.recordAdded(hash, src, dir)
+	if err := a.recordAdded(hash, src, dir); err != nil {
+		return err
+	}
+	a.noteRecentDir(dir)
+	if choice.Paused {
+		return a.setPaused(hash, true, false)
+	}
+	return nil
 }
 
 // ensureDownloadDir makes sure dir exists to download into. It creates dir
@@ -1482,6 +1507,7 @@ func (a *App) SaveSettings(s Settings) error {
 	// The remote control has its own controls (SetRemote); the Settings
 	// form's copy may be stale.
 	s.RemoteEnabled, s.RemotePort, s.RemoteTailscale = old.RemoteEnabled, old.RemotePort, old.RemoteTailscale
+	s.RecentDirs = old.RecentDirs
 	a.settings = s
 	eng := a.eng
 	a.mu.Unlock()

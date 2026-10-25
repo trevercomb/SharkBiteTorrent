@@ -6,12 +6,28 @@ export function AddLinks(arg1) {
   return window['go']['main']['App']['AddLinks'](arg1);
 }
 
+export function AddLinksTo(arg1, arg2) {
+  return window['go']['main']['App']['AddLinksTo'](arg1, arg2);
+}
+
 export function AddMagnet(arg1) {
   return window['go']['main']['App']['AddMagnet'](arg1);
 }
 
+export function AddMagnetTo(arg1, arg2) {
+  return window['go']['main']['App']['AddMagnetTo'](arg1, arg2);
+}
+
 export function AddSearchResult(arg1) {
   return window['go']['main']['App']['AddSearchResult'](arg1);
+}
+
+export function AddSearchResultTo(arg1, arg2) {
+  return window['go']['main']['App']['AddSearchResultTo'](arg1, arg2);
+}
+
+export function AddTorrentFiles(arg1, arg2) {
+  return window['go']['main']['App']['AddTorrentFiles'](arg1, arg2);
 }
 
 export function AutoDetectSearch() {
@@ -32,6 +48,10 @@ export function ChooseDirectory(arg1) {
 
 export function ChooseDownloadDir() {
   return window['go']['main']['App']['ChooseDownloadDir']();
+}
+
+export function ChooseTorrentFiles() {
+  return window['go']['main']['App']['ChooseTorrentFiles']();
 }
 
 export function ConnectSearch(arg1, arg2) {
@@ -214,6 +234,10 @@ export function SearchTorrents(arg1, arg2) {
   return window['go']['main']['App']['SearchTorrents'](arg1, arg2);
 }
 
+export function SetAskSaveLocation(arg1) {
+  return window['go']['main']['App']['SetAskSaveLocation'](arg1);
+}
+
 export function SetFilesWanted(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetFilesWanted'](arg1, arg2, arg3);
 }
@@ -248,6 +272,10 @@ export function StartRemotePairing(arg1) {
 
 export function StartTorrent(arg1) {
   return window['go']['main']['App']['StartTorrent'](arg1);
+}
+
+export function StartTorrentIn(arg1, arg2) {
+  return window['go']['main']['App']['StartTorrentIn'](arg1, arg2);
 }
 
 export function VerifyTorrent(arg1) {

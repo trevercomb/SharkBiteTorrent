@@ -179,7 +179,7 @@
     const diff = (...keys: (keyof main.Settings)[]) => keys.some(k => String(s![k]) !== String(original![k]))
     return {
       vpn: vpnChanged,
-      downloads: diff('downloadDir', 'downLimitKB', 'upLimitKB', 'scanDownloads', 'autoVerify'),
+      downloads: diff('downloadDir', 'askSaveLocation', 'downLimitKB', 'upLimitKB', 'scanDownloads', 'autoVerify'),
       app: diff('closeToTray', 'autoUpdateCheck', 'updateChannel') || (!!startup && !startup.viaWindowsSettings && startupOn !== startup.enabled),
     }
   })
@@ -228,6 +228,13 @@
               <button onclick={pickDir}>Change…</button>
             </div>
             <p class="muted small">Used for torrents you add from now on. Existing torrents stay where they are.</p>
+            <label class="check">
+              <input type="checkbox" bind:checked={s.askSaveLocation} />
+              <span>Ask where to save each download</span>
+            </label>
+            <p class="muted small">
+              Before anything is added, choose its folder (this one, a recent one, or another) and whether to start it now.
+            </p>
           </fieldset>
 
           <fieldset>

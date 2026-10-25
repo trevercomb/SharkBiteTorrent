@@ -7,8 +7,10 @@ import "errors"
 // The file-host browser window is Windows-only so far (hostpages_windows.go).
 
 type hostPage struct {
-	URL string
-	ID  string
+	URL    string
+	ID     string
+	Dir    string // where its download goes ("" = the default folder)
+	Paused bool   // add the download paused
 }
 
 type hostBrowser struct{}

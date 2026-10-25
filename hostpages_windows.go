@@ -28,8 +28,10 @@ import (
 // hostPage is a file host's page to get a download link from; ID is set when
 // it's for a fresh link to an existing download.
 type hostPage struct {
-	URL string
-	ID  string
+	URL    string
+	ID     string
+	Dir    string // where its download goes ("" = the default folder)
+	Paused bool   // add the download paused
 }
 
 type hostBrowser struct {
