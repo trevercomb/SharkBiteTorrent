@@ -48,6 +48,70 @@ https://dl.example/archive.7z.001, https://en.wikipedia.org/wiki/Foo_(bar)`
 	}
 }
 
+// Folder listings and archive pages link relatively; those links are found
+// and resolved against the page, without its sort and parent links.
+func TestLinksFromPage(t *testing.T) {
+	listing := `<html><body><h1>Index of /releases/x86_64</h1>
+<a href="?C=N;O=D">Name</a> <a href="?C=M;O=A">Last modified</a>
+<a href="/releases/">Parent Directory</a>
+<a href="alpine-standard-3.20.3-x86_64.iso">alpine-standard-3.20.3-x86_64.iso</a>
+<a href='alpine-standard-3.20.3-x86_64.iso.sha256'>sha256</a>
+<a href="netboot/">netboot/</a>
+<a href="#top">top</a> <a href="mailto:x@example.org">mail</a> <a href="javascript:void(0)">js</a>
+<a href="https://mirror.example.org/other.iso">elsewhere</a>
+</body></html>`
+	base, _ := url.Parse("https://dl.example.org/releases/x86_64/")
+	got := LinksFrom(listing, base)
+	want := []string{
+		"https://dl.example.org/releases/x86_64/alpine-standard-3.20.3-x86_64.iso",
+		"https://dl.example.org/releases/x86_64/alpine-standard-3.20.3-x86_64.iso.sha256",
+		"https://dl.example.org/releases/x86_64/netboot/",
+		"https://mirror.example.org/other.iso",
+	}
+	var urls []string
+	for _, l := range got {
+		urls = append(urls, l.URL)
+	}
+	if strings.Join(urls, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got\n%s\nwant\n%s", strings.Join(urls, "\n"), strings.Join(want, "\n"))
+	}
+	if got[0].Kind != File || got[0].Name != "alpine-standard-3.20.3-x86_64.iso" {
+		t.Errorf("first: %+v", got[0])
+	}
+
+	// An archive's download page: root-relative and protocol-relative links.
+	page := `<a href="/download/some-item/Some%20Book.epub">EPUB</a> <a href="//archive.example.org/download/some-item/scan.pdf">PDF</a>`
+	base, _ = url.Parse("https://archive.example.org/details/some-item")
+	got = LinksFrom(page, base)
+	if len(got) != 2 || got[0].URL != "https://archive.example.org/download/some-item/Some%20Book.epub" || got[0].Name != "Some Book.epub" ||
+		got[1].URL != "https://archive.example.org/download/some-item/scan.pdf" {
+		t.Errorf("archive page: %+v", got)
+	}
+
+	// Without a page (pasted text), relative links mean nothing: not found.
+	if got := Links(listing); len(got) != 1 {
+		t.Errorf("pasted text: %+v", got)
+	}
+}
+
+// Find reads a page and resolves its relative links against where it ended
+// up after redirects.
+func TestFindRelative(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/old" {
+			http.Redirect(w, r, "/files/", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(`<a href="a.zip">a</a> <a href="b.iso">b</a>`))
+	}))
+	defer srv.Close()
+	got, err := Find(context.Background(), srv.Client(), srv.URL+"/old")
+	if err != nil || len(got) != 2 || got[0].URL != srv.URL+"/files/a.zip" || got[1].URL != srv.URL+"/files/b.iso" {
+		t.Errorf("got %+v, %v", got, err)
+	}
+}
+
 func TestBase58(t *testing.T) {
 	// "1" is a zero digit: the key is padded to 32 bytes either way.
 	for _, s := range []string{"1", "2", "GJdz7a5tnug32Uw4FB8uydUoXtjCCxaeRPvCewfYCFPq"} {

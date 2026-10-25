@@ -43,61 +43,86 @@ type Link struct {
 // other http(s) address is fetched, and anything else is the text itself.
 // hc should go through the VPN.
 func Read(ctx context.Context, hc *http.Client, input string) (string, error) {
+	text, _, err := read(ctx, hc, input)
+	return text, err
+}
+
+// Find reads input as Read does and lists the links in it. Links in a
+// fetched page may be relative to it (a folder listing's "file.iso", an
+// archive's "/download/item/file.zip"): they're resolved against the page.
+func Find(ctx context.Context, hc *http.Client, input string) ([]Link, error) {
+	text, base, err := read(ctx, hc, input)
+	if err != nil {
+		return nil, err
+	}
+	return LinksFrom(text, base), nil
+}
+
+// read is Read, also returning the address of the page it fetched (after
+// redirects), nil if it fetched none.
+func read(ctx context.Context, hc *http.Client, input string) (string, *url.URL, error) {
 	input = strings.TrimSpace(input)
 	u, err := url.Parse(input)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(input, " \t\r\n") {
-		return input, nil
+		return input, nil, nil
 	}
 	if looksLikePrivateBin(u) {
-		return readPrivateBin(ctx, hc, u)
+		text, err := readPrivateBin(ctx, hc, u)
+		return text, nil, err
 	}
 	if l, ok := classify(input); ok && l.Kind != Page {
-		return input, nil // a link to a file (or a .torrent) is itself the list
+		return input, nil, nil // a link to a file (or a .torrent) is itself the list
 	}
-	text, err := fetchPage(ctx, hc, u)
+	text, base, err := fetchPage(ctx, hc, u)
 	if errors.Is(err, errNotPage) {
-		return input, nil // it was a file after all, without a telling name
+		return input, nil, nil // it was a file after all, without a telling name
 	}
-	return text, err
+	return text, base, err
 }
 
 var errNotPage = errors.New("not a page")
 
-func fetchPage(ctx context.Context, hc *http.Client, u *url.URL) (string, error) {
+func fetchPage(ctx context.Context, hc *http.Client, u *url.URL) (string, *url.URL, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set("Accept", "text/html,text/plain;q=0.9,*/*;q=0.5")
 	req.Header.Set("User-Agent", UserAgent)
 	resp, err := hc.Do(req)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s: HTTP %d", u.Host, resp.StatusCode)
+		return "", nil, fmt.Errorf("%s: HTTP %d", u.Host, resp.StatusCode)
 	}
 	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if ct != "" && !strings.HasPrefix(ct, "text/") && ct != "application/xhtml+xml" && ct != "application/json" {
-		return "", errNotPage
+		return "", nil, errNotPage
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxPage))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return string(b), nil
+	return string(b), resp.Request.URL, nil
 }
 
 var (
 	urlRe    = regexp.MustCompile(`(?i)\bhttps?://[^\s"'<>\x60]+`)
 	magnetRe = regexp.MustCompile(`(?i)\bmagnet:\?[^\s"'<>\x60]+`)
+	hrefRe   = regexp.MustCompile(`(?i)\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 )
 
-// Links finds the links in text (plain text or HTML) in the order they
-// appear, without duplicates. Relative links in HTML aren't resolved: a page
-// of downloads lists full addresses.
-func Links(text string) []Link {
+// Links finds the full addresses and magnet links in text (plain text or
+// HTML) in the order they appear, without duplicates.
+func Links(text string) []Link { return LinksFrom(text, nil) }
+
+// LinksFrom is Links for the text of the page at base: its relative links
+// (href="file.iso", "../other/", "/download/x") are found too, resolved
+// against base. Links that only re-sort or jump within the page ("?C=N;O=D",
+// "#top") and a folder listing's link to its parent are left out.
+func LinksFrom(text string, base *url.URL) []Link {
 	text = html.UnescapeString(text) // &amp; in hrefs
 	type hit struct {
 		at int
@@ -107,6 +132,17 @@ func Links(text string) []Link {
 	for _, re := range []*regexp.Regexp{urlRe, magnetRe} {
 		for _, m := range re.FindAllStringIndex(text, -1) {
 			hits = append(hits, hit{m[0], text[m[0]:m[1]]})
+		}
+	}
+	if base != nil {
+		for _, m := range hrefRe.FindAllStringSubmatchIndex(text, -1) {
+			i := 2
+			if m[2] < 0 {
+				i = 4
+			}
+			if r, ok := resolve(base, strings.TrimSpace(text[m[i]:m[i+1]])); ok {
+				hits = append(hits, hit{m[0], r})
+			}
 		}
 	}
 	slices.SortFunc(hits, func(a, b hit) int { return a.at - b.at })
@@ -120,6 +156,31 @@ func Links(text string) []Link {
 		}
 	}
 	return out
+}
+
+// resolve turns a page's relative link into a full address. Full addresses
+// are left to the patterns above (found there already), and links that
+// don't lead anywhere new (anchors, sort orders, the parent folder,
+// javascript:, mailto:) are dropped.
+func resolve(base *url.URL, href string) (string, bool) {
+	if href == "" || strings.HasPrefix(href, "#") || strings.HasPrefix(href, "?") {
+		return "", false
+	}
+	ref, err := url.Parse(href)
+	if err != nil || ref.Scheme != "" || ref.Host != "" && !strings.HasPrefix(href, "//") {
+		return "", false // absolute (or not a web link): not ours to resolve
+	}
+	u := base.ResolveReference(ref)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", false
+	}
+	u.Fragment = ""
+	// A folder listing's "Parent Directory": an ancestor of the page itself.
+	if u.Host == base.Host && u.RawQuery == "" && strings.HasSuffix(u.Path, "/") &&
+		len(u.Path) < len(base.Path) && strings.HasPrefix(base.Path, u.Path) {
+		return "", false
+	}
+	return u.String(), true
 }
 
 // trimPunct drops what plain text puts after a link: "see https://x.org/a."

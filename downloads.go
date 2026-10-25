@@ -189,11 +189,10 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	text, err := paste.Read(ctx, hc, input)
+	links, err := paste.Find(ctx, hc, input)
 	if err != nil {
 		return nil, err
 	}
-	links := paste.Links(text)
 	if len(links) == 0 {
 		return nil, errors.New("no links found in that")
 	}

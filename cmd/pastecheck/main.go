@@ -46,13 +46,12 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	text, err := paste.Read(ctx, t.HTTPClient(), flag.Arg(0))
+	links, err := paste.Find(ctx, t.HTTPClient(), flag.Arg(0))
 	if err != nil {
 		fmt.Println("read:", err)
 		os.Exit(1)
 	}
-	links := paste.Links(text)
-	fmt.Printf("%d characters, %d links\n", len(text), len(links))
+	fmt.Printf("%d links\n", len(links))
 	count := map[string]int{}
 	for _, l := range links {
 		count[fmt.Sprintf("%-8s %s", l.Kind, l.Host)]++

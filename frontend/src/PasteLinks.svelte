@@ -15,8 +15,17 @@
   let error = $state('')
 
   const kindLabel: Record<string, string> = {
-    magnet: 'Torrent', torrent: 'Torrent', file: 'File', page: 'File host',
+    magnet: 'Torrent', torrent: 'Torrent', file: 'File', page: 'Page',
   }
+
+  // Files and torrents are what the user is after. Other links (a file
+  // host's pages, but on a download page also its menus, checksums and
+  // social buttons) are folded away unless they're all there is, as in a
+  // list of file-host links.
+  const direct = $derived((links ?? []).filter(l => l.kind !== 'page'))
+  const others = $derived((links ?? []).filter(l => l.kind === 'page'))
+  let showOthers = $state(false)
+  const shown = $derived(showOthers ? [...direct, ...others] : direct)
 
   async function find(ev: SubmitEvent) {
     ev.preventDefault()
@@ -26,11 +35,9 @@
     try {
       const found = await ReadPaste(input)
       links = found
-      // Torrents and files are what the user is after; pages only when the
-      // paste is nothing but pages (a list of file-host links), since a
-      // paste of files often links to unrelated pages too.
-      const direct = found.filter(l => l.kind !== 'page')
-      picked = new Set((direct.length ? direct : found).map(l => l.url))
+      const files = found.filter(l => l.kind !== 'page')
+      showOthers = files.length === 0
+      picked = new Set((files.length ? files : found).map(l => l.url))
     } catch (e) {
       error = String(e)
     }
@@ -89,12 +96,15 @@
 
     {#if links}
       <div class="head">
-        <span>{links.length} link{links.length > 1 ? 's' : ''} found</span>
-        <button class="link" onclick={() => (picked = new Set(links!.map(l => l.url)))}>All</button>
+        <span>
+          {#if direct.length}{direct.length} file{direct.length > 1 ? 's' : ''} or torrent{direct.length > 1 ? 's' : ''}{others.length ? `, ${others.length} other link${others.length > 1 ? 's' : ''}` : ''}
+          {:else}{links.length} link{links.length > 1 ? 's' : ''} found{/if}
+        </span>
+        <button class="link" onclick={() => (picked = new Set(shown.map(l => l.url)))}>All</button>
         <button class="link" onclick={() => (picked = new Set())}>None</button>
       </div>
       <ul>
-        {#each links as l (l.url)}
+        {#each shown as l (l.url)}
           <li>
             <label title={l.url}>
               <input type="checkbox" checked={picked.has(l.url)} onchange={() => toggle(l.url)} />
@@ -104,6 +114,13 @@
             </label>
           </li>
         {/each}
+        {#if direct.length && others.length}
+          <li>
+            <button class="more" onclick={() => (showOthers = !showOthers)}>
+              {showOthers ? '▾ Hide' : '▸ Show'} other links on the page ({others.length}): file-host pages, and anything that isn't clearly a file
+            </button>
+          </li>
+        {/if}
       </ul>
       {#if links.some(l => l.kind === 'page' && picked.has(l.url))}
         <p class="muted small">
@@ -152,6 +169,7 @@
   .kind.magnet, .kind.torrent { background: rgba(63, 185, 80, 0.15); color: var(--ok); }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .host { flex: none; color: var(--muted); font-size: 12px; }
+  .more { width: 100%; text-align: left; background: none; border: none; padding: 6px 10px; color: var(--accent); }
   .err { color: var(--err); white-space: pre-wrap; user-select: text; margin: 10px 0 0; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>
