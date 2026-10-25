@@ -476,7 +476,7 @@
     <button onclick={async () => addTorrentFiles(await ChooseTorrentFiles())} disabled={!connected || adding > 0}>Open .torrent…</button>
     <button onclick={() => (showPaste = true)} disabled={!connected} title="Download every link in some text, a page or a paste, through the VPN">Paste links…</button>
     <button class:active={searching} onclick={() => (searching = !searching)} disabled={!connected}>
-      {searching ? '← Torrents' : 'Search'}
+      {searching ? '← Downloads' : 'Search'}
     </button>
     <span class="sep"></span>
     {#if selDls.length > 0}
