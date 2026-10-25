@@ -1625,6 +1625,9 @@ func (a *App) loadSettings() {
 		UpdateChannel:   channelStable,
 		ScanDownloads:   true,
 		AutoVerify:      "suspect",
+		// On for everyone, including settings saved by older versions (no
+		// such field there): the dialog's "Don't ask again" turns it off.
+		AskSaveLocation: true,
 	}
 	if data, err := os.ReadFile(filepath.Join(a.configDir, "settings.json")); err == nil {
 		json.Unmarshal(data, &a.settings)

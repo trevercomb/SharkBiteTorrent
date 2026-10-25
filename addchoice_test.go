@@ -1,10 +1,33 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 )
+
+// Asking is on by default, also for settings saved before the option existed,
+// and stays off once turned off.
+func TestAskSaveLocationDefault(t *testing.T) {
+	for _, tc := range []struct {
+		saved string
+		want  bool
+	}{
+		{"", true}, // a new install
+		{`{"downloadDir": "D:\\dl", "scanDownloads": true}`, true}, // an older version's settings
+		{`{"askSaveLocation": false}`, false},
+	} {
+		a := &App{configDir: t.TempDir()}
+		if tc.saved != "" {
+			os.WriteFile(filepath.Join(a.configDir, "settings.json"), []byte(tc.saved), 0o600)
+		}
+		a.loadSettings()
+		if a.settings.AskSaveLocation != tc.want {
+			t.Errorf("%q: AskSaveLocation %v, want %v", tc.saved, a.settings.AskSaveLocation, tc.want)
+		}
+	}
+}
 
 func TestRecentDirs(t *testing.T) {
 	base := t.TempDir()
