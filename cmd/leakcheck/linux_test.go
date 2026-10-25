@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testdata/nft-linux.json is real `nft -j list table` output of nftRules,
@@ -139,25 +140,42 @@ func TestDNSLogger(t *testing.T) {
 	}
 	defer l.close()
 	u, tc := l.ports()
-	for _, c := range []struct {
-		network string
-		port    int
-		name    string
-	}{{"udp", u, "localhost"}, {"tcp", tc, "one.one.one.one"}} {
+	lookup := func(network string, port int, name string) error {
 		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, c.network, net.JoinHostPort("127.0.0.1", strconv.Itoa(c.port)))
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		}}
-		if _, err := r.LookupIPAddr(t.Context(), c.name+"."); err != nil && c.name != "localhost" {
-			t.Errorf("%s: %v", c.network, err)
-		}
+		_, err := r.LookupIPAddr(t.Context(), name+".")
+		return err
 	}
-	got := l.lookups()
-	if _, ok := got["localhost"]; !ok {
-		t.Errorf("UDP lookup not recorded: %v", got)
+	lookup("udp", u, "localhost") // answered or not, the name is recorded
+	if _, ok := l.lookups()["localhost"]; !ok {
+		t.Errorf("UDP lookup not recorded: %v", l.lookups())
 	}
-	if len(got["one.one.one.one"]) == 0 {
-		t.Errorf("TCP lookup's answers not recorded: %v", got)
+
+	// The TCP part needs the real nameserver to answer over TCP, which
+	// GitHub's runners stopped doing (Azure's 168.63.129.16: reset or EOF,
+	// 2026-10-25); only the recorder is under test, so check that first.
+	if !answersTCP(t, ns[0]) {
+		t.Logf("skipping the TCP part: %s doesn't answer DNS over TCP here", ns[0])
+		return
 	}
+	if err := lookup("tcp", tc, "one.one.one.one"); err != nil {
+		t.Errorf("tcp: %v", err)
+	}
+	if len(l.lookups()["one.one.one.one"]) == 0 {
+		t.Errorf("TCP lookup's answers not recorded: %v", l.lookups())
+	}
+}
+
+// answersTCP reports whether the nameserver answers a lookup over TCP.
+func answersTCP(t *testing.T, server string) bool {
+	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(server, "53"))
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err := r.LookupIPAddr(ctx, "one.one.one.one.")
+	return err == nil
 }
 
 // Windows' DNS Client event 3008 lists answers like this.
