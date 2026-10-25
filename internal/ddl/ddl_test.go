@@ -383,3 +383,28 @@ func TestStall(t *testing.T) {
 		t.Errorf("only %d requests: the stalled one wasn't retried", calls.Load())
 	}
 }
+
+// A saved download whose name has a folder in it (a tampered or very old
+// downloads.json) fails instead of writing outside its folder.
+func TestUnsafeSavedName(t *testing.T) {
+	data := testData(t, 1000)
+	srv := rangeServer(t, data, nil)
+	dir := t.TempDir()
+	m := newManager(nil)
+	m.Add(Spec{ID: "a", URL: srv.URL + "/x", Dir: dir, Name: `..\..\evil.exe`, Size: 1000, Ranges: true,
+		Segments: []Segment{{Start: 0, End: 1000}}})
+	st := waitState(t, m, "a", Failed)
+	if !strings.Contains(st.Error, "usable file name") {
+		t.Errorf("error %q", st.Error)
+	}
+	for _, n := range []string{"ok.iso", "part1.rar"} {
+		if !plainName(n) {
+			t.Errorf("%q refused", n)
+		}
+	}
+	for _, n := range []string{"", "..", "../x", `a\b`, "/etc/passwd", `C:\x`} {
+		if plainName(n) {
+			t.Errorf("%q accepted", n)
+		}
+	}
+}

@@ -48,15 +48,15 @@ func main() {
 	defer cancel()
 	links, err := paste.Find(ctx, t.HTTPClient(), flag.Arg(0))
 	if err != nil {
-		fmt.Println("read:", err)
+		fmt.Printf("read: %q\n", err.Error())
 		os.Exit(1)
 	}
 	fmt.Printf("%d links\n", len(links))
 	count := map[string]int{}
 	for _, l := range links {
-		count[fmt.Sprintf("%-8s %s", l.Kind, l.Host)]++
+		count[fmt.Sprintf("%-8s %q", l.Kind, l.Host)]++
 		if *verbose {
-			fmt.Println(" ", l.Kind, l.URL)
+			fmt.Printf("  %s %q\n", l.Kind, l.URL) // quoted: a page's links could carry terminal control characters
 		}
 	}
 	keys := make([]string, 0, len(count))
@@ -74,11 +74,11 @@ func main() {
 		if l.Kind == paste.Page {
 			page, err := paste.Read(ctx, t.HTTPClient(), l.URL)
 			if err != nil {
-				fmt.Println("dump:", err)
+				fmt.Printf("dump: %q\n", err.Error())
 				os.Exit(1)
 			}
 			if err := os.WriteFile(*dump, []byte(page), 0o600); err != nil {
-				fmt.Println("dump:", err)
+				fmt.Printf("dump: %q\n", err.Error())
 				os.Exit(1)
 			}
 			fmt.Printf("saved %s (%d bytes)\n", *dump, len(page))

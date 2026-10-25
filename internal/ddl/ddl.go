@@ -370,6 +370,12 @@ func (m *Manager) changed() {
 
 func partPath(s Spec) string { return filepath.Join(s.Dir, s.Name+PartSuffix) }
 
+// plainName is true for a file name with no folder in it: joined to the
+// download folder, it stays there.
+func plainName(n string) bool {
+	return n != "" && filepath.IsLocal(n) && filepath.Base(n) == n && !strings.ContainsAny(n, `/\`)
+}
+
 // run downloads one file until it's done, fails, needs a link or is stopped.
 func (m *Manager) run(ctx context.Context, j *job) {
 	defer close(j.done)
@@ -407,6 +413,11 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 	}
 	m.mu.Unlock()
 
+	// Names from servers go through SafeName, but one restored from a
+	// saved download isn't; never write outside the download folder.
+	if !plainName(spec.Name) {
+		return fmt.Errorf("%q isn't a usable file name", spec.Name)
+	}
 	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
 		return err
 	}
