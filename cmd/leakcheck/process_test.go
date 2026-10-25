@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -57,6 +58,27 @@ func TestSeenReused(t *testing.T) {
 	}
 	if !s.hasAt(7, t0.Add(3*time.Second), "") || s.hasAt(7, t0.Add(30*time.Second), "") {
 		t.Errorf("spans: %+v", s.spans[7])
+	}
+}
+
+// A set's root (the check itself, or the app it launched) counts for the
+// whole run, also for events from before the set was made: the check's own
+// test connection at the start must be found (a run failed on that).
+func TestRootWholeLife(t *testing.T) {
+	before := time.Now().UTC().Add(-5 * time.Minute)
+	s := newPIDSet(os.Getpid())
+	if !s.hasAt(os.Getpid(), before, "") || !s.hasAt(os.Getpid(), time.Now().UTC().Add(time.Hour), "") {
+		t.Errorf("root span: %+v", s.spans[os.Getpid()])
+	}
+	s.addChildren() // polling again doesn't cut it short
+	if !s.hasAt(os.Getpid(), before, "") {
+		t.Errorf("after polling: %+v", s.spans[os.Getpid()])
+	}
+	// Merged into a set from the logs, the logs' root span still rules.
+	logs := processTree(os.Getpid(), nil)
+	logs.merge(s)
+	if !logs.hasAt(os.Getpid(), before, "") {
+		t.Error("merged root lost")
 	}
 }
 
