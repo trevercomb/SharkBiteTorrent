@@ -57,6 +57,13 @@ It works out of the box with **free Cloudflare WARP**, so there's protection fro
 - **Per-torrent download folders**: changing the folder affects new torrents only, and the choice is remembered.
 - Torrents and settings survive restarts. Incomplete files are kept as `.part` files.
 - Right-click menu on a torrent: **Show files**, Pause/Resume, Remove.
+- **Ask where to save each download** (on by default; *Don't ask again* turns it off): before anything is added, choose its folder (the default, a recent one, or another) and whether to start it now. Links opened from outside the app get the same choice in their banner.
+
+**Direct downloads (Paste links)**
+- 📋 **Paste links, a page or a paste**, and the app lists every download in it: magnet links, `.torrent` files, file links, and links to file-hosting sites. It reads what you paste, a web page that lists downloads (a Linux mirror's release folder, an [Internet Archive](https://archive.org) item, a [Project Gutenberg](https://www.gutenberg.org) book), or an encrypted [PrivateBin](https://privatebin.info) paste, which it decrypts on your computer (the key, after the `#`, is never sent). Files and torrents are listed first in natural order (`3.20.2` before `3.20.10`, `part2` before `part10`), with a filter for long lists; you tick what you want.
+- **Downloads through the VPN**, like torrents: several connections per file where the server allows it, resumed after a restart or a dropped connection, and if the VPN goes down they wait for it rather than use your normal connection. Finished files are checked for malware like finished torrents.
+- **File hosts that only work in a real browser** (Windows for now): their pages open in a browser window of the app's own whose traffic, DNS included, goes through the VPN. The app clicks each page's download button, blocks every pop-up, and downloads the file itself (so it resumes). If a site asks you to prove you're human, you do that in the window and the app carries on; it never tries to get around such checks.
+- Multi-select (Ctrl/Shift+click) to pause, resume or remove several at once, and **Clear finished** to tidy the list (the files stay).
 
 **Desktop**
 - **Tray icon** with close-to-tray, Pause all / Resume all, and live speeds in the tooltip.
@@ -122,6 +129,7 @@ We checked this with the OS's own socket list: while downloading, the app's **on
 | **A `nofunding` build flag** | The funding is optional for users, so removing it shouldn't need code changes. One flag strips the sponsor button and referral links, and stops the updater from installing the official (funded) release over it. |
 | **"No VPN" is a separate engine path, never a fallback** | VPN mode builds the torrent client with OS sockets disabled and only tunnel-backed dialers; "No VPN" builds a plain client instead. The two never mix, so a VPN failure can't turn into a direct connection. |
 | **A local proxy for Prowlarr/Jackett, not a system-wide VPN** | The point of the app is that nothing else on the computer is affected. A proxy lets the search server opt in to the tunnel, and it fails closed: no app, no searches. |
+| **A browser window for file hosts, not code for each site** | Many hosts only serve a real browser that a person is using. A window of the app's own works with any of them without per-site code that breaks when a site changes, and it leaves anything that asks for a human to the human. Its traffic goes through a proxy into the app's tunnel that only the app's own processes may use, and it resolves no names itself. The app takes over each download from it, so downloads resume and are checked like the rest. |
 | **Search through Prowlarr or Jackett, with no sites built in** | Bundling scrapers for torrent sites would make the app look like a piracy tool and break whenever a site changes. Prowlarr and Jackett are maintained by their own communities, and users choose their own sources (the same model as qBittorrent's search plugins). |
 
 ## Limitations
@@ -131,6 +139,7 @@ We checked this with the OS's own socket list: while downloading, the app's **on
 - **TCP peers only (no uTP), by choice**: the only uTP library that can run inside the tunnel is an older, slower pure-Go one. TCP already reaches 35–40 MB/s through WARP, so it isn't worth the CPU cost and complexity.
 - **macOS:** no tray icon yet (the tray library and Wails both need the main thread), and the app is unsigned.
 - **Linux and macOS** now go through the release checks too, with a leak test built for each (run on CachyOS and on macOS 27). Each OS's test sees traffic differently and has its own limits, listed in [RELEASING.md](RELEASING.md). Far fewer people use these builds than the Windows one, so expect rougher edges, and please report problems.
+- **Paste links' browser window is Windows-only so far.** On Linux and macOS, links to file hosts' pages say so; direct file links, pages that link to files, pastes and torrents work everywhere. The window's automatic click is generic (the page's most prominent free "download" button, never anything selling something): if a host ignores it, the window asks you to click.
 - VPN sign-in follows each provider's official flow and is tested against their real server lists, but not yet with real paid accounts for every provider. Please report problems.
 
 ## Build from source
