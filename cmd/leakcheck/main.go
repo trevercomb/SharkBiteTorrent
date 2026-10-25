@@ -1112,8 +1112,11 @@ func (s *pidSet) hasAt(pid int, t time.Time, image string) bool {
 	return false
 }
 
+// newPIDSet watches pid, for its whole life (it's the check itself or the
+// app it launched, both running from the start of the run), and the
+// processes it starts.
 func newPIDSet(pid int) *pidSet {
-	s := &pidSet{pids: map[int]bool{pid: true}}
+	s := &pidSet{pids: map[int]bool{pid: true}, spans: map[int][]span{pid: {{}}}}
 	s.addChildren()
 	return s
 }
@@ -1222,6 +1225,8 @@ func (s *pidSet) seenLocked(pid int, image string, now time.Time) {
 	}
 	last := &sp[len(sp)-1]
 	switch {
+	case last.from.IsZero() && last.to.IsZero():
+		// a root (newPIDSet, processTree): watched for its whole life
 	case last.ended:
 	case image == "" || last.image != "" && image != last.image:
 		last.ended = true // exited, or the ID was reused
@@ -1237,6 +1242,9 @@ func (s *pidSet) reusedLocked(pid int, image string) bool {
 		return false
 	}
 	last := sp[len(sp)-1]
+	if last.from.IsZero() && last.to.IsZero() {
+		return false // a root
+	}
 	return last.ended || last.image != "" && last.image != image
 }
 
