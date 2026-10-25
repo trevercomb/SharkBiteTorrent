@@ -12,7 +12,7 @@ func TestProcessTreeReusedID(t *testing.T) {
 	t0 := time.Date(2026, 10, 25, 3, 0, 0, 0, time.UTC)
 	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
 	const root, webview, gpu, other = 100, 200, 300, 999
-	set := processTree(root, []procEvent{
+	set := processTree(root, "sharkbitetorrent.exe", []procEvent{
 		{at: at(1), pid: webview, parent: root, image: "msedgewebview2.exe"},
 		{at: at(2), pid: gpu, parent: webview, image: "msedgewebview2.exe"},
 		{at: at(10), pid: gpu, exit: true},
@@ -49,14 +49,14 @@ func TestProcessTreeReusedID(t *testing.T) {
 func TestSeenReused(t *testing.T) {
 	t0 := time.Now().UTC()
 	s := &pidSet{pids: map[int]bool{7: true}, spans: map[int][]span{}}
-	s.seenLocked(7, "msedgewebview2.exe", t0)
-	s.seenLocked(7, "msedgewebview2.exe", t0.Add(5*time.Second))
-	s.seenLocked(7, "", t0.Add(6*time.Second))                // exited
-	s.seenLocked(7, "nvcontainer.exe", t0.Add(7*time.Second)) // reused
+	s.seenLocked(7, "msedgewebview2.exe", t0, t0.Add(-2*time.Second)) // started since the poll before
+	s.seenLocked(7, "msedgewebview2.exe", t0.Add(5*time.Second), t0)
+	s.seenLocked(7, "", t0.Add(6*time.Second), t0)                // exited
+	s.seenLocked(7, "nvcontainer.exe", t0.Add(7*time.Second), t0) // reused
 	if !s.reusedLocked(7, "nvcontainer.exe") {
 		t.Error("reuse not noticed")
 	}
-	if !s.hasAt(7, t0.Add(3*time.Second), "") || s.hasAt(7, t0.Add(30*time.Second), "") {
+	if !s.hasAt(7, t0.Add(-2*time.Second), "") || !s.hasAt(7, t0.Add(3*time.Second), "") || s.hasAt(7, t0.Add(30*time.Second), "") {
 		t.Errorf("spans: %+v", s.spans[7])
 	}
 }
@@ -75,7 +75,7 @@ func TestRootWholeLife(t *testing.T) {
 		t.Errorf("after polling: %+v", s.spans[os.Getpid()])
 	}
 	// Merged into a set from the logs, the logs' root span still rules.
-	logs := processTree(os.Getpid(), nil)
+	logs := processTree(os.Getpid(), "", nil)
 	logs.merge(s)
 	if !logs.hasAt(os.Getpid(), before, "") {
 		t.Error("merged root lost")
@@ -106,5 +106,50 @@ func TestCheckBrowserArgs(t *testing.T) {
 	twoProxies := host + " --proxy-server=127.0.0.1:9"
 	if msg := checkBrowserArgs(set(main, twoProxies)); msg == "" {
 		t.Error("a file-host window with two proxies passed")
+	}
+}
+
+// The app's own start event (by Explorer, which isn't watched) comes first
+// in the log; it must not drop the app, or none of its children would be
+// followed (a fresh-eyes audit found that).
+func TestProcessTreeRootStartEvent(t *testing.T) {
+	t0 := time.Date(2026, 10, 25, 3, 0, 0, 0, time.UTC)
+	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
+	const explorer, root, webview, network = 10, 100, 200, 300
+	set := processTree(root, "sharkbitetorrent.exe", []procEvent{
+		{at: at(0), pid: root, parent: explorer, image: "sharkbitetorrent.exe"},
+		{at: at(1), pid: webview, parent: root, image: "msedgewebview2.exe"},
+		{at: at(1), pid: network, parent: webview, image: "msedgewebview2.exe"}, // short-lived
+		{at: at(2), pid: network, exit: true},
+		{at: at(60), pid: root, exit: true},
+		{at: at(61), pid: root, parent: explorer, image: "other.exe"}, // the app's ID reused
+	})
+	for _, c := range []struct {
+		pid   int
+		at    int
+		image string
+		want  bool
+	}{
+		{root, 30, "sharkbitetorrent.exe", true},
+		{webview, 1, "msedgewebview2.exe", true}, // its very first second
+		{network, 1, "msedgewebview2.exe", true}, // lived one second, never polled
+		{root, 90, "other.exe", false},
+		{root, 90, "", false},
+	} {
+		if got := set.hasAt(c.pid, at(c.at), c.image); got != c.want {
+			t.Errorf("pid %d at +%ds (%q): %v, want %v", c.pid, c.at, c.image, got, c.want)
+		}
+	}
+	if !set.has(webview) || !set.has(network) {
+		t.Errorf("children not followed: %v", set.pids)
+	}
+}
+
+// Engine mode: the root is the check itself (leakcheck.exe, or a go run
+// build), so its connections count whatever its program is called.
+func TestProcessTreeEngineRoot(t *testing.T) {
+	set := processTree(4242, "", nil)
+	if !set.hasAt(4242, time.Now(), "leakcheck.exe") {
+		t.Error("the check's own connections are dropped in engine mode")
 	}
 }
