@@ -42,3 +42,7 @@ jobs:
           name: audit-report
           path: report.md
           if-no-files-found: ignore
+          # The repository is public, so any GitHub user could download the
+          # report, including weaknesses not fixed yet: kept for a day only,
+          # and deleted once downloaded (RELEASING.md, Audit brief).
+          retention-days: 1

@@ -148,7 +148,9 @@ func (a *App) betaChannel() bool {
 
 // releaseTagRe finds release tags in GitHub's releases feed (the newest 10
 // releases, pre-releases included; drafts aren't in it).
-var releaseTagRe = regexp.MustCompile(`/releases/tag/v([^"<>/\s]+)"`)
+// Only this repository's own release links count, as an href (not text in a
+// release's description, nor another repository's links).
+var releaseTagRe = regexp.MustCompile(`href="` + regexp.QuoteMeta(releasesURL) + `/tag/v([^"<>/\s]+)"`)
 
 // newestPrerelease returns the newest pre-release version in the releases
 // feed, or "" if there's none or the feed can't be read. The feed is a web

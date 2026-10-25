@@ -48,7 +48,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="show the size, send nothing")
     args = ap.parse_args()
 
-    tag = git("describe", "--tags", "--abbrev=0", "--match", "v*").strip()
+    # From the last release, not the last beta (v0.3.0-beta.2): a release's
+    # audit must see everything since the previous release.
+    tag = git("describe", "--tags", "--abbrev=0", "--match", "v*", "--exclude", "*-*").strip()
     head = git("rev-parse", "--short", "HEAD").strip()
     diff = git("diff", f"{tag}..HEAD")
 
