@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,7 +36,7 @@ type hostPage struct {
 }
 
 type hostBrowser struct {
-	win   *browser.Window
+	win   *browser.Remote // the window, in a process of its own
 	proxy *socks.Server
 
 	mu      sync.Mutex
@@ -109,7 +110,7 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		proxy:  &socks.Server{NoAuth: true, Allow: browser.FromThisApp, Dial: a.searchDial},
 	}
 	go h.proxy.Serve(ln)
-	h.win, err = browser.Open(browser.Options{
+	h.win, err = browser.Start(a.exe, browser.Options{
 		Proxy:   ln.Addr().String(),
 		DataDir: filepath.Join(a.configDir, "browser"),
 		Title:   "Shark BiteTorrent: getting downloads",
@@ -268,3 +269,10 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage) error {
 }
 
 var errWindowClosed = fmt.Errorf("the download window was closed")
+
+// browserWindowArg starts the app as the browser window's process.
+const browserWindowArg = browser.HelperArg
+
+// runBrowserWindow is that process: the window, run for the app that
+// started it, until it closes or the app goes away.
+func runBrowserWindow() error { return browser.ServeHelper(os.Stdin, os.Stdout) }

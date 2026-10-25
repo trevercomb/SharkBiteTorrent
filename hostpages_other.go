@@ -20,3 +20,8 @@ func (a *App) openHostPages([]hostPage) error {
 }
 
 func (a *App) closeHostPages() {}
+
+// The browser window's process exists on Windows only.
+const browserWindowArg = "--browser-window"
+
+func runBrowserWindow() error { return errors.New("the browser window is Windows-only") }

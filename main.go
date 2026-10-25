@@ -40,6 +40,10 @@ func main() {
 			err = platform.UnregisterAssociations(exe)
 		case "--remove-startup":
 			err = platform.SetStartup(exe, false)
+		case browserWindowArg:
+			// The app's file-host browser window, in a process of its own
+			// (hostpages_windows.go).
+			err = runBrowserWindow()
 		default:
 			err = fmt.Errorf("unknown option %s", os.Args[1])
 		}
