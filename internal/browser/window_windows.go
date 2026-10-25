@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/wailsapp/go-webview2/pkg/edge"
@@ -278,6 +279,28 @@ func (w *Window) Eval(js string) {
 			}
 		}
 	})
+}
+
+// Query runs js in the page and returns its result as JSON ("" if the
+// window is gone, or no answer within 10 s).
+func (w *Window) Query(js string) string {
+	got := make(chan string, 1)
+	if !w.do(func() {
+		wv := webviewOf(w.chromium)
+		if wv == nil || !executeScript(wv, js, func(s string) { got <- s }) {
+			got <- ""
+		}
+	}) {
+		return ""
+	}
+	select {
+	case s := <-got:
+		return s
+	case <-w.closed:
+		return ""
+	case <-time.After(10 * time.Second):
+		return ""
+	}
 }
 
 // DocumentTitle is the page's <title> ("" if the window is gone).

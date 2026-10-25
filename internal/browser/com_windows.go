@@ -112,6 +112,42 @@ func newHandler(fn func(args unsafe.Pointer)) *handler {
 	return h
 }
 
+// forget drops a one-shot handler once WebView2 has called it.
+func forget(h *handler) {
+	handlersMu.Lock()
+	defer handlersMu.Unlock()
+	for i, x := range handlers {
+		if x == h {
+			handlers = append(handlers[:i], handlers[i+1:]...)
+			return
+		}
+	}
+}
+
+// executeScript runs js in the page and calls done with its result as JSON
+// ("null" if it failed). ExecuteScript's completion handler is called with
+// (HRESULT, LPCWSTR result), which fits handler's (sender, args).
+func executeScript(wv unsafe.Pointer, js string, done func(string)) bool {
+	p, err := windows.UTF16PtrFromString(js)
+	if err != nil {
+		return false
+	}
+	var h *handler
+	h = newHandler(func(result unsafe.Pointer) {
+		forget(h)
+		s := "null"
+		if result != nil {
+			s = windows.UTF16PtrToString((*uint16)(result))
+		}
+		done(s)
+	})
+	if failed(call(wv, slotExecuteScript, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(h)))) {
+		forget(h)
+		return false
+	}
+	return true
+}
+
 func webviewOf(c *edge.Chromium) unsafe.Pointer {
 	wv, err := c.GetController().GetCoreWebView2()
 	if err != nil || wv == nil {

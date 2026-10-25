@@ -44,6 +44,8 @@ func fakeHelper() {
 			enc.Encode(event{Ev: "download", URL: c.Arg + "/file.iso", Disposition: `attachment; filename="file.iso"`})
 		case "title":
 			enc.Encode(event{Ev: "title", ID: c.ID, Text: "Page title"})
+		case "query":
+			enc.Encode(event{Ev: "result", ID: c.ID, Text: `"ran: ` + c.Arg + `"`})
 		case "close":
 			os.Exit(0)
 		}
@@ -83,6 +85,9 @@ func TestRemote(t *testing.T) {
 	r.Navigate("https://host.example/f/1")
 	if got := r.DocumentTitle(); got != "Page title" {
 		t.Errorf("title %q", got)
+	}
+	if got := r.Query("1+1"); got != `"ran: 1+1"` {
+		t.Errorf("query %q", got)
 	}
 	mu.Lock()
 	if len(loaded) != 1 || len(downloads) != 1 || downloads[0].URL != "https://host.example/f/1/file.iso" {

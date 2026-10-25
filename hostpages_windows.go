@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -177,8 +176,9 @@ func (a *App) driveHostBrowser(h *hostBrowser) {
 		h.mu.Unlock()
 
 		done++
-		h.win.SetTitle(fmt.Sprintf("Shark BiteTorrent: getting download %d of %d", done, total))
-		if err := a.visitHostPage(h, p); err != nil {
+		status := fmt.Sprintf("Shark BiteTorrent: getting download %d of %d", done, total)
+		h.win.SetTitle(status)
+		if err := a.visitHostPage(h, p, status); err != nil {
 			select {
 			case <-h.win.Done():
 				h.mu.Lock()
@@ -193,18 +193,59 @@ func (a *App) driveHostBrowser(h *hostBrowser) {
 	}
 }
 
-func isHumanCheck(title string) bool {
-	t := strings.ToLower(title)
-	for _, s := range []string{"just a moment", "attention required", "checking your browser", "verify you are human", "ddos-guard"} {
-		if strings.Contains(t, s) {
-			return true
+// humanCheckScript is true while the page waits for a person: a full-page
+// check ("Just a moment…"), or a Cloudflare Turnstile, hCaptcha or reCAPTCHA
+// box inside the page that hasn't been passed yet (each fills in a hidden
+// field once it has).
+const humanCheckScript = `(() => {
+	if (/just a moment|attention required|checking your browser|verify you are human|ddos-guard/i.test(document.title)) return true;
+	const unsolved = (box, answer) => !!document.querySelector(box) && !((document.querySelector(answer) || {}).value);
+	return unsolved('iframe[src*="challenges.cloudflare.com"], .cf-turnstile', 'input[name="cf-turnstile-response"]')
+		|| unsolved('iframe[src*="hcaptcha.com"], .h-captcha', 'textarea[name="h-captcha-response"]')
+		|| unsolved('iframe[src*="recaptcha"], .g-recaptcha', 'textarea[name="g-recaptcha-response"]');
+})()`
+
+// humanGrace: many checks finish by themselves (no click) within a few
+// seconds; only one still waiting after this asks the user.
+const humanGrace = 6 * time.Second
+
+// waitForHuman returns once the page isn't waiting for a person, asking the
+// user to do the check in the window if it is. The app never tries to get
+// around such a check.
+func (a *App) waitForHuman(h *hostBrowser, p hostPage, status string) error {
+	pending := func() bool { return h.win.Query(humanCheckScript) == "true" }
+	wait := func(until time.Time) (bool, error) {
+		for pending() {
+			if time.Now().After(until) {
+				return true, nil
+			}
+			select {
+			case <-time.After(time.Second):
+			case <-h.win.Done():
+				return true, errWindowClosed
+			}
 		}
+		return false, nil
 	}
-	return false
+	still, err := wait(time.Now().Add(humanGrace))
+	if !still || err != nil {
+		return err
+	}
+	h.win.SetTitle("Shark BiteTorrent: prove you're human in this window. The downloads carry on by themselves after that")
+	h.win.Show()
+	runtime.EventsEmit(a.ctx, "notice", "A file host wants you to prove you're human. Do that in the Shark BiteTorrent browser window, and the downloads carry on by themselves.")
+	if still, err = wait(time.Now().Add(humanCheckWait)); err != nil {
+		return err
+	} else if still {
+		return fmt.Errorf("%s: the human check wasn't done in time", p.URL)
+	}
+	h.win.SetTitle(status)
+	return nil
 }
 
-// visitHostPage loads one page and gets its download link.
-func (a *App) visitHostPage(h *hostBrowser, p hostPage) error {
+// visitHostPage loads one page and gets its download link. status is the
+// window's title meanwhile.
+func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 	drain := func() {
 		for len(h.loaded) > 0 {
 			<-h.loaded
@@ -223,26 +264,19 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage) error {
 		return errWindowClosed
 	}
 
-	// A check that wants a human: the user does it, in the window.
-	if isHumanCheck(h.win.DocumentTitle()) {
-		h.win.SetTitle("Shark BiteTorrent: prove you're human in this window. The downloads carry on by themselves after that")
-		h.win.Show()
-		runtime.EventsEmit(a.ctx, "notice", "A file host wants you to prove you're human. Do that in the Shark BiteTorrent browser window, and the downloads carry on by themselves.")
-		deadline := time.Now().Add(humanCheckWait)
-		for isHumanCheck(h.win.DocumentTitle()) {
-			if time.Now().After(deadline) {
-				return fmt.Errorf("%s: the human check wasn't done in time", p.URL)
-			}
-			select {
-			case <-time.After(time.Second):
-			case <-h.win.Done():
-				return errWindowClosed
-			}
-		}
-	}
-
 	time.Sleep(1500 * time.Millisecond) // let the page's own scripts set up
 	for range clickTries {
+		// A check that wants a human (on loading, or after a "free
+		// download" step): the user does it, in the window, before any click.
+		if err := a.waitForHuman(h, p, status); err != nil {
+			return err
+		}
+		select {
+		case d := <-h.caught: // passing the check started the download
+			a.addFromHost(p, d.link, d.disposition)
+			return nil
+		default:
+		}
 		h.win.Eval(clickScript)
 		select {
 		case d := <-h.caught:

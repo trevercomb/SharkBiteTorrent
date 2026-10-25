@@ -29,13 +29,13 @@ type helperConfig struct {
 
 // command is the app → window message; event is window → app.
 type command struct {
-	Cmd string `json:"cmd"` // navigate, eval, title, settitle, show, close
+	Cmd string `json:"cmd"` // navigate, eval, query, title, settitle, show, close
 	Arg string `json:"arg,omitempty"`
 	ID  int64  `json:"id,omitempty"`
 }
 
 type event struct {
-	Ev          string `json:"ev"` // ready, error, loaded, download, popup, title
+	Ev          string `json:"ev"` // ready, error, loaded, download, popup, title, result
 	URL         string `json:"url,omitempty"`
 	Disposition string `json:"disposition,omitempty"`
 	Text        string `json:"text,omitempty"`
@@ -86,6 +86,8 @@ func ServeHelper(in io.Reader, out io.Writer) error {
 				w.Eval(c.Arg)
 			case "title":
 				go func(id int64) { send(event{Ev: "title", ID: id, Text: w.DocumentTitle()}) }(c.ID)
+			case "query":
+				go func(id int64, js string) { send(event{Ev: "result", ID: id, Text: w.Query(js)}) }(c.ID, c.Arg)
 			case "settitle":
 				w.SetTitle(c.Arg)
 			case "show":
@@ -106,7 +108,7 @@ type Remote struct {
 	stdin  io.WriteCloser
 	mu     sync.Mutex // guards writes to stdin and titles
 	enc    *json.Encoder
-	titles map[int64]chan string
+	titles map[int64]chan string // answers waited for (titles, query results), by ID
 	nextID atomic.Int64
 	done   chan struct{}
 }
@@ -188,7 +190,7 @@ func (r *Remote) read(out *bufio.Reader, ready chan<- error) {
 			if r.o.OnPopup != nil {
 				r.o.OnPopup(NewWindow{URL: e.URL})
 			}
-		case "title":
+		case "title", "result":
 			r.mu.Lock()
 			ch := r.titles[e.ID]
 			delete(r.titles, e.ID)
@@ -220,13 +222,21 @@ func (r *Remote) SetTitle(s string)   { r.send(command{Cmd: "settitle", Arg: s})
 func (r *Remote) Show()               { r.send(command{Cmd: "show"}) }
 
 // DocumentTitle is the page's <title> ("" if the window is gone or slow).
-func (r *Remote) DocumentTitle() string {
+func (r *Remote) DocumentTitle() string { return r.ask(command{Cmd: "title"}) }
+
+// Query runs js in the page and returns its result as JSON ("" if the
+// window is gone or slow).
+func (r *Remote) Query(js string) string { return r.ask(command{Cmd: "query", Arg: js}) }
+
+// ask sends c and waits for the answer with its ID.
+func (r *Remote) ask(c command) string {
 	id := r.nextID.Add(1)
+	c.ID = id
 	ch := make(chan string, 1)
 	r.mu.Lock()
 	r.titles[id] = ch
 	r.mu.Unlock()
-	if !r.send(command{Cmd: "title", ID: id}) {
+	if !r.send(c) {
 		return ""
 	}
 	select {
