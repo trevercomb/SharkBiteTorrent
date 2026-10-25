@@ -51,6 +51,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +89,9 @@ const piaKeyPort = 1337
 const (
 	wfpSubcategory     = "Filtering Platform Connection"
 	processSubcategory = "Process Creation"
+	// Process Termination (event 4689) tells when each watched process ended,
+	// so a later process that Windows gives the same ID isn't taken for it.
+	processEndSubcategory = "Process Termination"
 	dnsLog             = "Microsoft-Windows-DNS-Client/Operational"
 	appImage           = "SharkBiteTorrent.exe"
 
@@ -255,7 +259,7 @@ func run() int {
 		}
 		if why, ok := documentedDirect[strings.ToLower(strings.TrimSuffix(l.name, "."))]; ok && l.pid == root {
 			allowed = append(allowed, "lookup of "+l.name+" ("+why+")")
-		} else if watched.has(l.pid) {
+		} else if watched.hasAt(l.pid, l.at, "") {
 			lookups = append(lookups, l.name)
 		}
 	}
@@ -672,7 +676,7 @@ func startAuditing() (restore func(), err error) {
 		restore()
 		return nil, err
 	}
-	for _, sub := range []string{wfpSubcategory, processSubcategory} {
+	for _, sub := range []string{wfpSubcategory, processSubcategory, processEndSubcategory} {
 		out, err := systool.Command("auditpol", "/get", "/subcategory:"+sub, "/r").Output()
 		if err != nil {
 			return fail(fmt.Errorf("auditpol: %w", err))
@@ -798,33 +802,79 @@ func since(t time.Time) string {
 }
 
 // descendants returns root and every process started (directly or not) by
-// it since start, from the process-creation log (event 4688).
+// it since start, each with when it ran, from the process-creation and
+// -termination logs (events 4688 and 4689). Windows reuses process IDs
+// quickly: a WebView2 process that exits can hand its ID to some other
+// program a moment later (seen: NVIDIA's nvcontainer.exe), whose traffic
+// must not count as the app's.
 func descendants(start time.Time, root int) (*pidSet, error) {
-	evs, err := queryLog("Security", "*[System[EventID=4688 and "+since(start)+"]]")
+	created, err := queryLog("Security", "*[System[EventID=4688 and "+since(start)+"]]")
 	if err != nil {
 		return nil, err
 	}
-	children := map[int][]int{}
-	for _, e := range evs {
+	ended, err := queryLog("Security", "*[System[EventID=4689 and "+since(start)+"]]")
+	if err != nil {
+		return nil, err
+	}
+	var evs []procEvent
+	at := func(e event) time.Time {
+		t, _ := time.Parse(time.RFC3339Nano, e.System.TimeCreated.SystemTime)
+		return t
+	}
+	for _, e := range created {
 		child, err1 := parseHexPID(e.field("NewProcessId"))
 		parent, err2 := parseHexPID(e.field("ProcessId"))
 		if err1 == nil && err2 == nil {
-			children[parent] = append(children[parent], child)
+			evs = append(evs, procEvent{at: at(e), pid: child, parent: parent, image: imageName(e.field("NewProcessName"))})
 		}
 	}
-	set := &pidSet{pids: map[int]bool{root: true}}
-	queue := []int{root}
-	for len(queue) > 0 {
-		p := queue[0]
-		queue = queue[1:]
-		for _, c := range children[p] {
-			if !set.pids[c] {
-				set.pids[c] = true
-				queue = append(queue, c)
-			}
+	for _, e := range ended {
+		if pid, err := parseHexPID(e.field("ProcessId")); err == nil {
+			evs = append(evs, procEvent{at: at(e), pid: pid, exit: true})
 		}
 	}
-	return set, nil
+	return processTree(root, evs), nil
+}
+
+// procEvent is a process starting (with its parent) or exiting.
+type procEvent struct {
+	at          time.Time
+	pid, parent int
+	image       string
+	exit        bool
+}
+
+// processTree follows root's descendants through starts and exits in time
+// order: a process counts only if it started while its parent was one of
+// them, and only for as long as it ran.
+func processTree(root int, evs []procEvent) *pidSet {
+	slices.SortStableFunc(evs, func(a, b procEvent) int { return a.at.Compare(b.at) })
+	set := &pidSet{pids: map[int]bool{root: true}, spans: map[int][]span{root: {{image: strings.ToLower(appImage)}}}}
+	alive := map[int]bool{root: true}
+	for _, e := range evs {
+		switch {
+		case !e.exit && alive[e.parent]:
+			set.pids[e.pid] = true
+			set.spans[e.pid] = append(set.spans[e.pid], span{from: e.at, image: e.image})
+			alive[e.pid] = true
+		case !e.exit:
+			alive[e.pid] = false // an ID reused by something else
+		case alive[e.pid]:
+			sp := set.spans[e.pid]
+			sp[len(sp)-1].to = e.at
+			alive[e.pid] = false
+		}
+	}
+	return set
+}
+
+// imageName is a program's file name, lower case ("msedgewebview2.exe"),
+// from a full path in any form Windows logs it.
+func imageName(path string) string {
+	if i := strings.LastIndexAny(path, `\/`); i >= 0 {
+		path = path[i+1:]
+	}
+	return strings.ToLower(path)
 }
 
 func parseHexPID(s string) (int, error) {
@@ -841,7 +891,8 @@ func connectionEvents(start time.Time, pids *pidSet) ([]conn, error) {
 	var out []conn
 	for _, e := range evs {
 		pid, _ := strconv.Atoi(e.field("ProcessId"))
-		if !pids.has(pid) {
+		at, _ := time.Parse(time.RFC3339Nano, e.System.TimeCreated.SystemTime)
+		if !pids.hasAt(pid, at, imageName(e.field("Application"))) {
 			continue
 		}
 		proto := map[string]string{"6": "TCP", "17": "UDP"}[e.field("Protocol")]
@@ -856,7 +907,6 @@ func connectionEvents(start time.Time, pids *pidSet) ([]conn, error) {
 		if !outbound {
 			local, remote = dst, src
 		}
-		at, _ := time.Parse(time.RFC3339Nano, e.System.TimeCreated.SystemTime)
 		out = append(out, conn{
 			at: at, pid: pid, app: e.field("Application"), outbound: outbound, proto: proto,
 			local: local, remote: remote, permitted: e.System.EventID == 5156,
@@ -941,7 +991,12 @@ func checkBrowserArgs(s *pidSet) string {
 		if !strings.Contains(strings.ToLower(s.kind[pid]), "msedgewebview2.exe") || strings.Contains(cmd, "--type=") {
 			continue
 		}
-		found = true
+		// The file-host window ("Paste links") reaches the network, but only
+		// through the app's own proxy into the VPN, resolving nothing itself.
+		hostWindow := strings.Contains(cmd, "--proxy-server=socks5://127.0.0.1:")
+		if !hostWindow {
+			found = true
+		}
 		last := ""
 		for _, f := range strings.Fields(cmd) {
 			if v, ok := strings.CutPrefix(f, "--disable-features="); ok {
@@ -953,7 +1008,14 @@ func checkBrowserArgs(s *pidSet) string {
 				return "WebView2 (PID " + strconv.Itoa(pid) + ") didn't get the app's --disable-features (missing " + need + "); its background features are on"
 			}
 		}
-		for _, need := range []string{"--proxy-server=127.0.0.1:9", "--host-resolver-rules="} {
+		needs := []string{"--proxy-server=127.0.0.1:9", "--host-resolver-rules="}
+		if hostWindow {
+			needs = []string{"--host-resolver-rules=", "MAP * ~NOTFOUND", "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"}
+			if strings.Count(cmd, "--proxy-server=") != 1 {
+				return "the file-host window's WebView2 (PID " + strconv.Itoa(pid) + ") has more than one --proxy-server (the last one wins)"
+			}
+		}
+		for _, need := range needs {
 			if !strings.Contains(cmd, need) {
 				return "WebView2 (PID " + strconv.Itoa(pid) + ") didn't get " + need
 			}
@@ -1015,6 +1077,39 @@ type pidSet struct {
 	pids map[int]bool
 	kind map[int]string // e.g. "msedgewebview2.exe --type=utility --utility-sub-type=…"
 	cmd  map[int]string // full command line
+	// spans: when each process with that ID was one of the watched ones
+	// (none known: any time, as for the check's own process).
+	spans map[int][]span
+}
+
+// span is one process's life under an ID; to is zero while it runs.
+type span struct {
+	from, to time.Time
+	image    string // lower-case file name; "" if unknown
+	ended    bool   // addChildren saw another program under the ID
+}
+
+// spanSlack covers the logs' and the polling's timing being a little off.
+const spanSlack = time.Second
+
+// hasAt reports whether the event at t from pid (image: its program's file
+// name, if the event names it) came from a watched process.
+func (s *pidSet) hasAt(pid int, t time.Time, image string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sp := s.spans[pid]
+	if len(sp) == 0 {
+		return s.pids[pid]
+	}
+	for _, x := range sp {
+		if t.Before(x.from.Add(-spanSlack)) || !x.to.IsZero() && t.After(x.to.Add(spanSlack)) {
+			continue
+		}
+		if image == "" || x.image == "" || strings.EqualFold(image, x.image) {
+			return true
+		}
+	}
+	return false
 }
 
 func newPIDSet(pid int) *pidSet {
@@ -1043,10 +1138,18 @@ func (s *pidSet) merge(o *pidSet) {
 	if s.kind == nil {
 		s.kind, s.cmd = map[int]string{}, map[int]string{}
 	}
+	if s.spans == nil {
+		s.spans = map[int][]span{}
+	}
 	for p := range o.pids {
 		s.pids[p] = true
 		if k := o.kind[p]; k != "" {
 			s.kind[p], s.cmd[p] = k, o.cmd[p]
+		}
+		// The logs know best when a process ran; the polling's spans fill
+		// in for any the logs missed.
+		if len(s.spans[p]) == 0 {
+			s.spans[p] = o.spans[p]
 		}
 	}
 }
@@ -1058,9 +1161,11 @@ func (s *pidSet) addChildren() {
 	if err != nil {
 		return
 	}
+	now := time.Now().UTC()
 	parent := map[int][]int{}
 	kinds := map[int]string{}
 	cmds := map[int]string{}
+	images := map[int]string{}
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 2 {
@@ -1070,6 +1175,7 @@ func (s *pidSet) addChildren() {
 			if len(f) >= 3 {
 				kinds[p] = processKind(f[2], strings.Join(f[3:], " "))
 				cmds[p] = strings.Join(f[3:], " ")
+				images[p] = strings.ToLower(f[2])
 			}
 		}
 	}
@@ -1078,22 +1184,60 @@ func (s *pidSet) addChildren() {
 	if s.kind == nil {
 		s.kind, s.cmd = map[int]string{}, map[int]string{}
 	}
+	if s.spans == nil {
+		s.spans = map[int][]span{}
+	}
 	for p := range s.pids {
-		if k, ok := kinds[p]; ok {
+		if k, ok := kinds[p]; ok && !s.reusedLocked(p, images[p]) {
 			s.kind[p], s.cmd[p] = k, cmds[p]
 		}
+		s.seenLocked(p, images[p], now)
 	}
 	for changed := true; changed; {
 		changed = false
 		for p := range s.pids {
+			if s.reusedLocked(p, images[p]) {
+				continue // not ours any more: neither are its children
+			}
 			for _, c := range parent[p] {
 				if !s.pids[c] {
 					s.pids[c], changed = true, true
 					s.kind[c], s.cmd[c] = kinds[c], cmds[c]
+					s.seenLocked(c, images[c], now)
 				}
 			}
 		}
 	}
+}
+
+// seenLocked extends pid's polled span to now, or ends it if another
+// program now runs under that ID (or nothing does).
+func (s *pidSet) seenLocked(pid int, image string, now time.Time) {
+	sp := s.spans[pid]
+	if len(sp) == 0 {
+		if image != "" {
+			s.spans[pid] = []span{{from: now, to: now, image: image}}
+		}
+		return
+	}
+	last := &sp[len(sp)-1]
+	switch {
+	case last.ended:
+	case image == "" || last.image != "" && image != last.image:
+		last.ended = true // exited, or the ID was reused
+	default:
+		last.to = now
+	}
+}
+
+// reusedLocked: the program now running under pid isn't the watched one.
+func (s *pidSet) reusedLocked(pid int, image string) bool {
+	sp := s.spans[pid]
+	if len(sp) == 0 || image == "" {
+		return false
+	}
+	last := sp[len(sp)-1]
+	return last.ended || last.image != "" && last.image != image
 }
 
 // processKind is the image name plus Chromium's process-type switches.
