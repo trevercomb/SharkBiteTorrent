@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Each test points a provider's API URL at a fake server that mimics the
@@ -254,4 +256,72 @@ func TestAPIUsesTunnelWhenSet(t *testing.T) {
 	if err := getJSON(context.Background(), apiClient(), srv.URL, &struct{}{}); err != nil || viaTunnel != 2 {
 		t.Errorf("after SetTunnel(nil): err=%v, tunnel dials=%d", err, viaTunnel)
 	}
+}
+
+// A saved PIA token is reused until it's due for renewal, instead of
+// signing in on every connect (which gets the account rate-limited).
+func TestPIATokenReuse(t *testing.T) {
+	logins := 0
+	tokens := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		logins++
+		w.Write([]byte(`{"token":"fresh"}`))
+	})
+	list := fake(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
+	keepPIAURLs(t)
+	piaTokenURL, piaServerList = tokens.URL, list.URL
+	p, _ := Get("pia")
+	ctx := context.Background()
+
+	acc, err := p.Login(ctx, map[string]string{"username": "p1234567", "password": "pw"})
+	if err != nil || savedToken(acc, time.Now()) != "fresh" {
+		t.Fatalf("login didn't save its token: %+v %v", acc, err)
+	}
+	logins = 0
+	p.Connect(ctx, acc, "", "US") // fails at the server list; only the sign-in matters here
+	if logins != 0 {
+		t.Errorf("signed in again with a saved token (%d)", logins)
+	}
+
+	acc.Data[piaToken] = "old"
+	acc.Data[piaTokenExpires] = strconv.FormatInt(time.Now().Add(-time.Minute).Unix(), 10)
+	p.Connect(ctx, acc, "", "US")
+	if logins != 1 || savedToken(acc, time.Now()) != "fresh" {
+		t.Errorf("expired token: %d sign-ins, token %q", logins, acc.Data[piaToken])
+	}
+	if savedToken(acc, time.Now().Add(piaTokenUse+time.Minute)) != "" {
+		t.Error("a token is used past piaTokenUse")
+	}
+}
+
+func TestRateLimit(t *testing.T) {
+	srv := fake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	keepPIAURLs(t)
+	piaTokenURL = srv.URL
+	p, _ := Get("pia")
+	_, err := p.Login(context.Background(), map[string]string{"username": "p1234567", "password": "pw"})
+	var rl *RateLimitError
+	if !errors.As(err, &rl) || rl.RetryAfter != 2*time.Minute {
+		t.Fatalf("sign-in: %v", err)
+	}
+	err = getJSON(context.Background(), srv.Client(), srv.URL, &struct{}{})
+	if !errors.As(err, &rl) {
+		t.Fatalf("getJSON: %v", err)
+	}
+
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	if d := retryAfter(now.Add(5*time.Minute).Format(http.TimeFormat), now); d != 5*time.Minute {
+		t.Errorf("HTTP date: %v", d)
+	}
+	if d := retryAfter("", now); d != 0 {
+		t.Errorf("none: %v", d)
+	}
+}
+
+// keepPIAURLs puts PIA's real API URLs back after the test.
+func keepPIAURLs(t *testing.T) {
+	tok, list := piaTokenURL, piaServerList
+	t.Cleanup(func() { piaTokenURL, piaServerList = tok, list })
 }

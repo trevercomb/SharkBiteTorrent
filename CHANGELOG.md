@@ -8,8 +8,12 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 - **Beta update channel** (Settings → App → Update channel): choose **Beta** to also be offered previews of the next version, signed and checked like releases. **Stable** (the default) offers releases only. Not in the Microsoft Store version, which the Store updates.
 
 ### Fixed
+- macOS: after the app started in the background at sign-in (**Start Shark BiteTorrent in the background when I sign in**), clicking its Dock icon didn't show the window, so it had to be quit and opened again. It now starts hidden the way closing the window hides it (the window may flash for a moment at sign-in), and the Dock icon brings the window back.
+- macOS: after an update, the first sign-in didn't start the app at all: macOS ties the sign-in item to the exact program it set up, and an app without an Apple Developer ID changes that with every update, so macOS stopped it. The app now registers its sign-in item again after it's updated.
 - Linux: after **Download (verified)**, the command that installs the update (`sudo pacman -U …`) is shown in its own box with a **Copy** button, and the window scrolls to it. Before, it was a line of text that a file manager window, opened by itself over the app, usually covered. **Show in folder** opens the folder when you want it.
 - Linux: the window showed the logo of Wails, the toolkit it's built with, instead of Shark BiteTorrent's icon (in the title bar and the taskbar, on Wayland in particular).
+- **Private Internet Access:** the app signed in to PIA every time it connected (each start, update, reconnect and **Retry**), so restarting a few times, or using the same account on several computers, could get sign-ins refused with "PIA login failed (HTTP 429)", and **Retry** only made it last longer. It now keeps PIA's sign-in (encrypted, like your password) and reuses it for up to 20 hours, so it signs in about once a day.
+- When a VPN provider turns requests away because of too many in a short time (HTTP 429), the app says so, waits (as long as the provider asks, or 10 minutes, then longer if it's still refused), and connects again by itself. **Retry** doesn't contact the provider during the wait, so it can't make it longer.
 
 ## [0.2.40] - 2026-10-22
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"sharkbite/internal/secret"
@@ -38,6 +39,113 @@ func (a *App) loadAccounts() (map[string]*vpnprov.Account, error) {
 func (a *App) saveAccounts(accs map[string]*vpnprov.Account) error {
 	data, _ := json.Marshal(accs)
 	return secret.WriteFile(a.accountsPath(), data)
+}
+
+// saveAccountCache saves the cached state (a session token) Connect left in
+// acc, if that's still the stored account for provider (not signed out or
+// replaced meanwhile).
+func (a *App) saveAccountCache(provider string, acc *vpnprov.Account) {
+	a.accountsMu.Lock()
+	defer a.accountsMu.Unlock()
+	accs, err := a.loadAccounts()
+	cur := accs[provider]
+	if err != nil || cur == nil || accountKey(cur) != accountKey(acc) {
+		return
+	}
+	changed := false
+	for k, v := range acc.Data {
+		if strings.HasPrefix(k, vpnprov.CachePrefix) && cur.Data[k] != v {
+			cur.Data[k] = v
+			changed = true
+		}
+	}
+	if changed {
+		a.saveAccounts(accs)
+	}
+}
+
+// rateLimitError is shown while a provider is turning requests away.
+type rateLimitError struct {
+	name  string
+	until time.Time
+}
+
+func (e *rateLimitError) Error() string {
+	return fmt.Sprintf("%s is turning sign-ins away for now: too many in a short time (HTTP 429). "+
+		"The app will try again by itself at %s.", e.name, e.until.Format("3:04 PM"))
+}
+
+// The wait before trying again when the provider doesn't say how long:
+// 10 minutes, doubling each time it's still limited, up to an hour.
+const (
+	limitFirstWait = 10 * time.Minute
+	limitMaxWait   = time.Hour
+)
+
+func providerName(provider string) string {
+	if p, ok := vpnprov.Get(provider); ok {
+		return p.Info().Name
+	}
+	return provider
+}
+
+// rateLimitedNow returns a *rateLimitError if provider is still turning
+// requests away.
+func (a *App) rateLimitedNow(provider string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.limitProvider != provider || !time.Now().Before(a.limitUntil) {
+		return nil
+	}
+	return &rateLimitError{providerName(provider), a.limitUntil}
+}
+
+// noteRateLimit returns err, or if it says provider is limiting requests,
+// records that, schedules connecting again once the wait is over, and
+// returns the message to show.
+func (a *App) noteRateLimit(provider string, err error) error {
+	var rl *vpnprov.RateLimitError
+	if !errors.As(err, &rl) {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.limitProvider != provider {
+		a.limitStrikes = 0
+	}
+	wait := rl.RetryAfter
+	if wait <= 0 {
+		wait = limitFirstWait << min(a.limitStrikes, 3)
+	}
+	wait = min(max(wait, time.Minute), limitMaxWait)
+	a.limitProvider, a.limitUntil = provider, time.Now().Add(wait)
+	a.limitStrikes++
+	if a.limitTimer != nil {
+		a.limitTimer.Stop()
+	}
+	a.limitTimer = time.AfterFunc(wait, func() {
+		a.mu.Lock()
+		retry := a.vpn.State == "error" && a.settings.VpnProvider == "account" &&
+			a.settings.AccountProvider == provider && !a.shuttingDown
+		a.mu.Unlock()
+		if retry {
+			a.Reconnect()
+		}
+	})
+	return &rateLimitError{providerName(provider), a.limitUntil}
+}
+
+// clearRateLimit forgets a limit once provider accepted a connection.
+func (a *App) clearRateLimit(provider string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.limitProvider == provider {
+		a.limitProvider, a.limitStrikes = "", 0
+		if a.limitTimer != nil {
+			a.limitTimer.Stop()
+			a.limitTimer = nil
+		}
+	}
 }
 
 func (a *App) account(provider string) *vpnprov.Account {
@@ -88,6 +196,8 @@ func (a *App) LoginVpnAccount(provider string, creds map[string]string) (LoginRe
 	if !ok {
 		return LoginResult{}, fmt.Errorf("unknown provider %q", provider)
 	}
+	a.accountsMu.Lock()
+	defer a.accountsMu.Unlock()
 	// Checked before signing in, so a failure can't leave a new device
 	// registered at the provider and forgotten here.
 	accs, err := a.loadAccounts()
@@ -114,9 +224,11 @@ func (a *App) LoginVpnAccount(provider string, creds map[string]string) (LoginRe
 	return LoginResult{Display: acc.Display}, nil
 }
 
-// LogoutVpnAccount signs out and forgets the stored credentials. If that
-// account was in use, the app falls back to WARP.
-func (a *App) LogoutVpnAccount(provider string) error {
+// forgetAccount signs out of provider's account and removes it from
+// accounts.json.
+func (a *App) forgetAccount(provider string) error {
+	a.accountsMu.Lock()
+	defer a.accountsMu.Unlock()
 	accs, err := a.loadAccounts()
 	if err != nil {
 		return err
@@ -139,7 +251,15 @@ func (a *App) LogoutVpnAccount(provider string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	return nil
+}
 
+// LogoutVpnAccount signs out and forgets the stored credentials. If that
+// account was in use, the app falls back to WARP.
+func (a *App) LogoutVpnAccount(provider string) error {
+	if err := a.forgetAccount(provider); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	inUse := a.settings.VpnProvider == "account" && a.settings.AccountProvider == provider
 	s := a.settings

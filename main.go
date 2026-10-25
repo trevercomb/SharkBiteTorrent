@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	_ "a.local/earlyinit" // must stay: see package doc
 	"sharkbite/internal/platform"
@@ -14,10 +16,13 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+var hideAtSignIn sync.Once
 
 func main() {
 	// Started at sign-in (Settings → Desktop): run in the tray, no window.
@@ -55,9 +60,20 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour:  &options.RGBA{R: 24, G: 26, B: 31, A: 1},
-		StartHidden:       autostart,
-		OnStartup:         app.startup,
+		BackgroundColour: &options.RGBA{R: 24, G: 26, B: 31, A: 1},
+		// macOS has no tray to bring back a window that was never shown, and
+		// a Dock click only unhides a hidden app (Wails v2 has no reopen
+		// hook), so there a sign-in start shows the window and hides the app,
+		// as the close button does. Once the page has loaded: hiding sooner
+		// loses to Wails activating the app as it finishes launching, which
+		// unhides it.
+		StartHidden: autostart && !hideOnClose,
+		OnStartup:   app.startup,
+		OnDomReady: func(ctx context.Context) {
+			if autostart && hideOnClose {
+				hideAtSignIn.Do(func() { runtime.Hide(ctx) }) // not again if the page reloads
+			}
+		},
 		OnShutdown:        app.shutdown,
 		OnBeforeClose:     app.beforeClose,
 		HideWindowOnClose: hideOnClose,
