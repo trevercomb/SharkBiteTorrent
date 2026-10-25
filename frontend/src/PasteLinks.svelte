@@ -22,10 +22,26 @@
   // host's pages, but on a download page also its menus, checksums and
   // social buttons) are folded away unless they're all there is, as in a
   // list of file-host links.
-  const direct = $derived((links ?? []).filter(l => l.kind !== 'page'))
+  // Files sorted by name with numbers compared as numbers, so releases
+  // (3.20.2 before 3.20.10) and parts (part2 before part10) come in order.
+  const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+  const direct = $derived(
+    (links ?? []).filter(l => l.kind !== 'page').sort((a, b) => natural.compare(show(a), show(b))),
+  )
   const others = $derived((links ?? []).filter(l => l.kind === 'page'))
   let showOthers = $state(false)
-  const shown = $derived(showOthers ? [...direct, ...others] : direct)
+
+  // A long list gets a filter: every word typed must appear in the name or site.
+  let filter = $state('')
+  const matches = (l: paste.Link) => {
+    const text = (show(l) + ' ' + (l.host ?? '')).toLowerCase()
+    return filter.toLowerCase().split(/\s+/).every(w => text.includes(w))
+  }
+  const shown = $derived((showOthers ? [...direct, ...others] : direct).filter(matches))
+
+  // Ticked from the start only when the list is short (a paste's parts):
+  // on a page with dozens of files, the user picks.
+  const preTick = 10
 
   async function find(ev: SubmitEvent) {
     ev.preventDefault()
@@ -35,9 +51,11 @@
     try {
       const found = await ReadPaste(input)
       links = found
+      filter = ''
       const files = found.filter(l => l.kind !== 'page')
+      const main = files.length ? files : found
       showOthers = files.length === 0
-      picked = new Set((files.length ? files : found).map(l => l.url))
+      picked = new Set(main.length <= preTick ? main.map(l => l.url) : [])
     } catch (e) {
       error = String(e)
     }
@@ -100,10 +118,18 @@
           {#if direct.length}{direct.length} file{direct.length > 1 ? 's' : ''} or torrent{direct.length > 1 ? 's' : ''}{others.length ? `, ${others.length} other link${others.length > 1 ? 's' : ''}` : ''}
           {:else}{links.length} link{links.length > 1 ? 's' : ''} found{/if}
         </span>
-        <button class="link" onclick={() => (picked = new Set(shown.map(l => l.url)))}>All</button>
+        <button class="link" onclick={() => (picked = new Set([...picked, ...shown.map(l => l.url)]))}
+          title={filter ? 'Tick every link the filter shows' : 'Tick every link shown'}>All</button>
         <button class="link" onclick={() => (picked = new Set())}>None</button>
       </div>
+      {#if links.length > preTick}
+        <input class="filter" type="search" bind:value={filter} placeholder="Filter, e.g. “standard 3.20.3”" />
+        {#if picked.size === 0 && !filter}
+          <p class="muted small hint">Many links: tick the ones you want, or filter and press All.</p>
+        {/if}
+      {/if}
       <ul>
+        {#if shown.length === 0}<li class="none muted">Nothing matches “{filter}”.</li>{/if}
         {#each shown as l (l.url)}
           <li>
             <label title={l.url}>
@@ -170,6 +196,9 @@
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .host { flex: none; color: var(--muted); font-size: 12px; }
   .more { width: 100%; text-align: left; background: none; border: none; padding: 6px 10px; color: var(--accent); }
+  .filter { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
+  .hint { margin: 0 0 6px; }
+  .none { padding: 8px 10px; }
   .err { color: var(--err); white-space: pre-wrap; user-select: text; margin: 10px 0 0; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>
