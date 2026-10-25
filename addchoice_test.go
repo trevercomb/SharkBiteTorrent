@@ -64,3 +64,15 @@ func TestRecentDirs(t *testing.T) {
 		t.Errorf("after SaveSettings: %v", a.settings.RecentDirs)
 	}
 }
+
+func TestLocalHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"localhost": true, "app.localhost": true, "127.0.0.1": true, "::1": true,
+		"192.168.4.26": true, "10.0.0.5": true, "172.16.1.1": true, "fe80::1": true,
+		"dl-cdn.alpinelinux.org": false, "1.1.1.1": false, "2606:4700::1111": false, "172.32.0.1": false,
+	} {
+		if got := localHost(host); got != want {
+			t.Errorf("localHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}

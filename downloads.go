@@ -11,8 +11,10 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,6 +189,11 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The VPN can't reach this computer or the home network: say so at once
+	// rather than after the minute a request there takes to give up.
+	if u, err := url.Parse(strings.TrimSpace(input)); err == nil && localHost(u.Hostname()) && !a.directMode() {
+		return nil, fmt.Errorf("%s is on this computer or your home network, which the app can't reach through the VPN", u.Hostname())
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	links, err := paste.Find(ctx, hc, input)
@@ -208,7 +215,9 @@ type AddLinksResult struct {
 
 // AddLinks downloads the links the user picked: torrents into the torrent
 // list, files directly, and file-host pages through the browser window.
-func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) { return a.addLinks(links, AddChoice{}) }
+func (a *App) AddLinks(links []paste.Link) (AddLinksResult, error) {
+	return a.addLinks(links, AddChoice{})
+}
 
 func (a *App) addLinks(links []paste.Link, choice AddChoice) (AddLinksResult, error) {
 	res := AddLinksResult{Errors: []string{}}
@@ -309,6 +318,16 @@ func (a *App) servesFile(url string) bool {
 	resp.Body.Close()
 	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	return (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) && ct != "text/html"
+}
+
+// localHost is true for this computer and private network addresses
+// (localhost, 127.x, 192.168.x, 10.x, fe80::, …), which the VPN can't reach.
+func localHost(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
 }
 
 // addTorrentURL fetches a .torrent file through the VPN and adds it.
