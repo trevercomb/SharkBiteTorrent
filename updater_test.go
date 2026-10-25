@@ -158,4 +158,11 @@ func TestNewestPrereleaseIn(t *testing.T) {
 	if got := newestPrereleaseIn([]byte(`<feed><link href="https://github.com/x/releases/tag/v0.2.40"/></feed>`)); got != "" {
 		t.Errorf("no pre-release: got %q", got)
 	}
+	// Only this repository's links, as hrefs: not another repository's, nor
+	// a link written in a release's description.
+	other := `<feed><entry><link href="https://github.com/someone/fork/releases/tag/v9.9.9-beta.1"/>
+<content>see https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v9.9.8-beta.1" here</content></entry></feed>`
+	if got := newestPrereleaseIn([]byte(other)); got != "" {
+		t.Errorf("foreign link taken: %q", got)
+	}
 }

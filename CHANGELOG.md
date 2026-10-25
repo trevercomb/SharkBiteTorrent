@@ -11,6 +11,9 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 - **Ask where to save each download** (Settings → Downloads, on by default): before anything is added, choose its folder (the default, one of the last five you used, or another) and whether to start it now or add it paused. *Don't ask again* turns it off. Links opened from outside the app get the folder choice in their banner.
 - **Beta update channel** (Settings → App → Update channel): choose **Beta** to also be offered previews of the next version, signed and checked like releases. **Stable** (the default) offers releases only. Not in the Microsoft Store version, which the Store updates.
 
+### Changed
+- Built with Wails 2.17, the toolkit the app's window is made with (up from 2.16). Nothing should look or work differently; if something in the window misbehaves, please report it.
+
 ### Fixed
 - macOS: after the app started in the background at sign-in (**Start Shark BiteTorrent in the background when I sign in**), clicking its Dock icon didn't show the window, so it had to be quit and opened again. It now starts hidden the way closing the window hides it (the window may flash for a moment at sign-in), and the Dock icon brings the window back.
 - macOS: after an update, the first sign-in didn't start the app at all: macOS ties the sign-in item to the exact program it set up, and an app without an Apple Developer ID changes that with every update, so macOS stopped it. The app now registers its sign-in item again after it's updated.

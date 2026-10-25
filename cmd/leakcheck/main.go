@@ -92,8 +92,8 @@ const (
 	// Process Termination (event 4689) tells when each watched process ended,
 	// so a later process that Windows gives the same ID isn't taken for it.
 	processEndSubcategory = "Process Termination"
-	dnsLog             = "Microsoft-Windows-DNS-Client/Operational"
-	appImage           = "SharkBiteTorrent.exe"
+	dnsLog                = "Microsoft-Windows-DNS-Client/Operational"
+	appImage              = "SharkBiteTorrent.exe"
 
 	// Planted by -selftest; the check must report both.
 	plantedConn   = "1.1.1.1:443"
@@ -228,7 +228,11 @@ func run() int {
 	if len(endpoints) == 0 {
 		return fatalCode("the app didn't record a VPN connection during the run (did it connect?); pass -endpoint ip:port")
 	}
-	watched, err := descendants(start, root)
+	rootImage := "" // engine mode: the root is this check itself
+	if *app {
+		rootImage = appImage
+	}
+	watched, err := descendants(start, root, rootImage)
 	if err != nil {
 		return fatalCode("reading the process log: " + err.Error())
 	}
@@ -807,7 +811,7 @@ func since(t time.Time) string {
 // quickly: a WebView2 process that exits can hand its ID to some other
 // program a moment later (seen: NVIDIA's nvcontainer.exe), whose traffic
 // must not count as the app's.
-func descendants(start time.Time, root int) (*pidSet, error) {
+func descendants(start time.Time, root int, rootImage string) (*pidSet, error) {
 	created, err := queryLog("Security", "*[System[EventID=4688 and "+since(start)+"]]")
 	if err != nil {
 		return nil, err
@@ -833,7 +837,7 @@ func descendants(start time.Time, root int) (*pidSet, error) {
 			evs = append(evs, procEvent{at: at(e), pid: pid, exit: true})
 		}
 	}
-	return processTree(root, evs), nil
+	return processTree(root, rootImage, evs), nil
 }
 
 // procEvent is a process starting (with its parent) or exiting.
@@ -846,13 +850,22 @@ type procEvent struct {
 
 // processTree follows root's descendants through starts and exits in time
 // order: a process counts only if it started while its parent was one of
-// them, and only for as long as it ran.
-func processTree(root int, evs []procEvent) *pidSet {
+// them, and only for as long as it ran. root counts from the start of the
+// run (its own start event, by a parent that isn't watched, is no reason to
+// drop it); rootImage is its program's file name, "" for any (engine mode,
+// where the root is the check itself).
+func processTree(root int, rootImage string, evs []procEvent) *pidSet {
 	slices.SortStableFunc(evs, func(a, b procEvent) int { return a.at.Compare(b.at) })
-	set := &pidSet{pids: map[int]bool{root: true}, spans: map[int][]span{root: {{image: strings.ToLower(appImage)}}}}
+	set := &pidSet{pids: map[int]bool{root: true}, spans: map[int][]span{root: {{image: strings.ToLower(rootImage)}}}}
 	alive := map[int]bool{root: true}
+	rootEnded := false
 	for _, e := range evs {
 		switch {
+		case e.pid == root && !rootEnded:
+			if e.exit { // the root itself quit: its ID could be reused after
+				set.spans[root][0].to = e.at
+				alive[root], rootEnded = false, true
+			}
 		case !e.exit && alive[e.parent]:
 			set.pids[e.pid] = true
 			set.spans[e.pid] = append(set.spans[e.pid], span{from: e.at, image: e.image})
@@ -1080,6 +1093,9 @@ type pidSet struct {
 	// spans: when each process with that ID was one of the watched ones
 	// (none known: any time, as for the check's own process).
 	spans map[int][]span
+	// lastPoll: when addChildren last looked (a process it finds now may
+	// have started any time since).
+	lastPoll time.Time
 }
 
 // span is one process's life under an ID; to is zero while it runs.
@@ -1190,11 +1206,16 @@ func (s *pidSet) addChildren() {
 	if s.spans == nil {
 		s.spans = map[int][]span{}
 	}
+	since := s.lastPoll
+	if since.IsZero() {
+		since = now.Add(-5 * time.Second)
+	}
+	s.lastPoll = now
 	for p := range s.pids {
 		if k, ok := kinds[p]; ok && !s.reusedLocked(p, images[p]) {
 			s.kind[p], s.cmd[p] = k, cmds[p]
 		}
-		s.seenLocked(p, images[p], now)
+		s.seenLocked(p, images[p], now, since)
 	}
 	for changed := true; changed; {
 		changed = false
@@ -1206,20 +1227,21 @@ func (s *pidSet) addChildren() {
 				if !s.pids[c] {
 					s.pids[c], changed = true, true
 					s.kind[c], s.cmd[c] = kinds[c], cmds[c]
-					s.seenLocked(c, images[c], now)
+					s.seenLocked(c, images[c], now, since)
 				}
 			}
 		}
 	}
 }
 
-// seenLocked extends pid's polled span to now, or ends it if another
+// seenLocked extends pid's polled span to now (a new one starting at
+// since, the previous poll: it may have started any time after), or ends it if another
 // program now runs under that ID (or nothing does).
-func (s *pidSet) seenLocked(pid int, image string, now time.Time) {
+func (s *pidSet) seenLocked(pid int, image string, now, since time.Time) {
 	sp := s.spans[pid]
 	if len(sp) == 0 {
 		if image != "" {
-			s.spans[pid] = []span{{from: now, to: now, image: image}}
+			s.spans[pid] = []span{{from: since, to: now, image: image}}
 		}
 		return
 	}
