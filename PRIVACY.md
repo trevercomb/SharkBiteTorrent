@@ -1,6 +1,6 @@
 # Privacy policy
 
-*Shark BiteTorrent, published by SharkByte Software. Last updated October 16, 2026.*
+*Shark BiteTorrent, published by SharkByte Software. Last updated October 27, 2026.*
 
 Shark BiteTorrent doesn't collect, store or share any information about you. There is no account with us, no analytics, no crash reporting and no ads, and the developers run no server for the app to send data to.
 
@@ -9,7 +9,7 @@ Shark BiteTorrent doesn't collect, store or share any information about you. The
 Everything the app keeps is stored only on your own device:
 
 - your settings and download list;
-- your VPN sign-ins or imported WireGuard configuration, encrypted with your operating system's protection (Windows DPAPI, or a key kept in the macOS Keychain or your Linux desktop's keyring). Like browsers' saved passwords, this keeps them unreadable on another computer or user account, but not from other programs running as you (on macOS any of your programs can read the Keychain entry without a prompt);
+- your VPN sign-ins or imported WireGuard configuration (and, for PIA, the session token from your last sign-in, reused for up to 20 hours so the app doesn't sign in at every connection), encrypted with your operating system's protection (Windows DPAPI, or a key kept in the macOS Keychain or your Linux desktop's keyring). Like browsers' saved passwords, this keeps them unreadable on another computer or user account, but not from other programs running as you (on macOS any of your programs can read the Keychain entry without a prompt);
 - the address and API key of your own Prowlarr or Jackett, if you connect one, and the phones you pair for remote control (also encrypted).
 
 On a Linux desktop with no keyring (some tiling window managers), the encryption key is instead kept in a file in the same settings folder that only your user account can read, and Settings says so. In that case anyone who gets a copy of the whole folder (a backup, say) can decrypt it.
@@ -27,7 +27,7 @@ Normally everything below goes through the VPN. The exceptions are spelled out: 
   - Opening Settings or browsing the list of providers doesn't contact any of them.
 - **Your WireGuard config's server**, if you imported one whose server is a name rather than an address: the name is looked up with your system's DNS when the app first connects (when you switch to it while another VPN is up, it's looked up through that VPN instead).
 - **Cloudflare's public trace page** (`cloudflare.com/cdn-cgi/trace`), through the VPN to check it works. When connecting to a provider other than WARP, it's also loaded once over your normal connection, to confirm the VPN's address differs from yours and to pick a server in your country.
-- **GitHub**, to check for new versions: when the app starts (if it hasn't checked in the last hour) and about once a day while it runs, through the VPN, and you can turn this off in Settings. If you click *Check for updates* or *Update now* while the VPN is down, the app asks first and uses your normal connection only if you agree; with *No VPN* chosen, checks use your normal connection. When a new version is available, its release notes are also loaded from `raw.githubusercontent.com` the same way. The Microsoft Store version gets updates from the Store instead and doesn't check GitHub.
+- **GitHub**, to check for new versions: when the app starts (if it hasn't checked in the last hour) and about once a day while it runs, through the VPN, and you can turn this off in Settings. On the **Beta** update channel it also reads GitHub's list of recent releases (`github.com/…/releases.atom`) and checks that a beta is published before offering it, the same way. If you click *Check for updates* or *Update now* while the VPN is down, the app asks first and uses your normal connection only if you agree; with *No VPN* chosen, checks use your normal connection. When a new version is available, its release notes are also loaded from `raw.githubusercontent.com` the same way. The Microsoft Store version gets updates from the Store instead and doesn't check GitHub.
 - **Your own Prowlarr or Jackett**, only if you set up search: directly if it's on this computer, your home network or Tailscale (the VPN can't reach those), and through the VPN anywhere else, such as a seedbox (whose name is then never looked up outside the VPN either). Downloading a search result goes through your Prowlarr/Jackett, or through the VPN for links to other sites (directly with *No VPN*). If you turn on the search proxy, the app changes Prowlarr's proxy setting through Prowlarr's API, and changes it back when you turn the proxy off.
 
 **Your operating system's own protection** works outside the app, over your normal connection: when the app marks finished downloads as coming from the internet and scans them (on by default; Settings → Desktop), Windows Defender, SmartScreen or macOS Gatekeeper may check the files with Microsoft or Apple, as they do for anything you download. ClamAV on Linux and macOS checks files locally.

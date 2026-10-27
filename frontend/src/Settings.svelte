@@ -419,8 +419,8 @@
               <p class="muted small">
                 <b>Beta</b> also offers previews of the next version, so you get fixes and new features sooner and can
                 help find problems before a release. Betas are signed and checked like releases, but have had less
-                testing. Switching back to <b>Stable</b> keeps the beta you have; you're offered the next release
-                once it's out. To go back to an older version, install it from the releases page. Save, then check
+                testing. Switching back to <b>Stable</b> keeps the beta you have; you're offered a release once one
+                newer than your beta is out. To go back to an older version, install it from the releases page. Save, then check
                 for updates to see the change.
               </p>
               {/if}

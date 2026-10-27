@@ -54,7 +54,7 @@ type App struct {
 	limitUntil    time.Time
 	limitStrikes  int
 	limitTimer    *time.Timer
-	stopOnce     sync.Once  // stopAll
+	stopOnce      sync.Once // stopAll
 	// installing: an update is being installed (InstallUpdate); a second
 	// one at the same time (a double click) is refused.
 	installing atomic.Bool
@@ -1485,6 +1485,10 @@ func (a *App) SaveSettings(s Settings) error {
 	}
 	if eng != nil {
 		eng.SetLimits(s.DownLimitKB*1024, s.UpLimitKB*1024)
+	}
+	if old.UpdateChannel != s.UpdateChannel && a.ctx != nil {
+		// An update offered on the other channel no longer applies.
+		runtime.EventsEmit(a.ctx, "update-channel-changed")
 	}
 	vpnChanged := old.VpnProvider != s.VpnProvider ||
 		(s.VpnProvider == "custom" && old.ForwardedPort != s.ForwardedPort) ||

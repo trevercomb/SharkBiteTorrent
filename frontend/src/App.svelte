@@ -50,6 +50,7 @@
     const id = setInterval(refresh, 1000)
     const off = EventsOn('error', (msg: string) => (error = msg))
     const offUpdate = EventsOn('update-available', (info: main.UpdateInfo) => (update = info))
+    const offChannel = EventsOn('update-channel-changed', () => (update = null))
     const offNotice = EventsOn('notice', (msg: string) => (notice = msg))
     // Wails only attaches its window drop listeners when OnFileDrop is called
     // from JS. Dropped file paths are then handled in Go (runtime.OnFileDrop in
@@ -68,6 +69,7 @@
       clearInterval(id)
       off()
       offUpdate()
+      offChannel()
       offNotice()
     }
   })

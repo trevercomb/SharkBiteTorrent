@@ -17,6 +17,7 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sharkbite/internal/platform"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -123,11 +124,20 @@ func (a *App) checkUpdate(ctx context.Context, allowDirect bool) (UpdateInfo, er
 	if !strings.HasPrefix(tag, "v") || !versionPattern.MatchString(info.Latest) {
 		return info, fmt.Errorf("unexpected release tag %q", tag)
 	}
+	beta := a.betaChannel()
+	if isPrerelease(info.Latest) && !beta {
+		// /latest should never point at a beta (they're published with
+		// --latest=false); if one is marked latest anyway, by mistake or by
+		// someone with the GitHub account but not the signing key, Stable
+		// users aren't moved onto it.
+		info.Latest = info.Current
+		return info, nil
+	}
 	// The beta channel also looks at pre-releases (v0.3.0-beta.1), which
 	// /latest never points to. They're installed only with the same signature
 	// check as releases.
-	if a.betaChannel() {
-		if pre := newestPrerelease(ctx, hc); pre != "" && newerVersion(pre, info.Latest) {
+	if beta {
+		if pre := newestPublishedPrerelease(ctx, hc, info.Latest); pre != "" {
 			info.Latest = pre
 			tag = "v" + pre
 		}
@@ -140,6 +150,15 @@ func (a *App) checkUpdate(ctx context.Context, allowDirect bool) (UpdateInfo, er
 	return info, nil
 }
 
+// checkChannel refuses a beta unless the Beta channel is chosen (a banner
+// from before the channel was switched back to Stable, say).
+func (a *App) checkChannel(version string) error {
+	if isPrerelease(version) && !a.betaChannel() {
+		return fmt.Errorf("%s is a beta; betas are only installed on the Beta update channel (Settings → App)", version)
+	}
+	return nil
+}
+
 func (a *App) betaChannel() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -147,32 +166,69 @@ func (a *App) betaChannel() bool {
 }
 
 // releaseTagRe finds release tags in GitHub's releases feed (the newest 10
-// releases, pre-releases included; drafts aren't in it).
+// releases, pre-releases included). The feed also lists tags that have no
+// published release, such as a beta's while CI builds it and until it's
+// signed and published, or one that was abandoned: see
+// newestPublishedPrerelease.
 // Only this repository's own release links count, as an href (not text in a
 // release's description, nor another repository's links).
 var releaseTagRe = regexp.MustCompile(`href="` + regexp.QuoteMeta(releasesURL) + `/tag/v([^"<>/\s]+)"`)
 
-// newestPrerelease returns the newest pre-release version in the releases
-// feed, or "" if there's none or the feed can't be read. The feed is a web
-// page, not the REST API, so it isn't held to the API's per-IP limit.
-func newestPrerelease(ctx context.Context, hc *http.Client) string {
+// newestPublishedPrerelease returns the newest pre-release in the releases
+// feed that is newer than latest (the newest release) and actually published,
+// or "" if there's none or the feed can't be read. The feed is a web page,
+// not the REST API, so it isn't held to the API's per-IP limit. Published
+// means its signature file can be downloaded: a draft's files aren't public,
+// and a bare tag has none. At most a few candidates are tried.
+func newestPublishedPrerelease(ctx context.Context, hc *http.Client, latest string) string {
 	feed, err := fetchSmall(ctx, hc, releasesURL+".atom")
 	if err != nil {
 		return ""
 	}
-	return newestPrereleaseIn(feed)
-}
-
-func newestPrereleaseIn(feed []byte) string {
-	var newest string
-	for _, m := range releaseTagRe.FindAllSubmatch(feed, -1) {
-		v := string(m[1])
-		if strings.Contains(v, "-") && versionPattern.MatchString(v) && (newest == "" || newerVersion(v, newest)) {
-			newest = v
+	tried := 0
+	for _, v := range prereleasesIn(feed) {
+		if !newerVersion(v, latest) || tried == 3 {
+			break
+		}
+		tried++
+		if published(ctx, hc, v) {
+			return v
 		}
 	}
-	return newest
+	return ""
 }
+
+// published reports whether version's release has its signature file up.
+func published(ctx context.Context, hc *http.Client, version string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, releasesURL+"/download/v"+version+"/"+signatureAsset, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+// prereleasesIn lists the pre-release versions in a releases feed, newest
+// first.
+func prereleasesIn(feed []byte) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range releaseTagRe.FindAllSubmatch(feed, -1) {
+		v := string(m[1])
+		if isPrerelease(v) && versionPattern.MatchString(v) && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return newerVersion(out[i], out[j]) })
+	return out
+}
+
+func isPrerelease(version string) bool { return strings.Contains(version, "-") }
 
 // newerVersion reports whether a > b for dotted numeric versions ("0.2.10" > "0.2.9").
 // A pre-release suffix ("0.3.0-rc1") sorts before the release it leads up to.
@@ -329,6 +385,9 @@ func (a *App) InstallUpdate(version string, allowDirect bool) (err error) {
 	}()
 	if !versionPattern.MatchString(version) {
 		return fmt.Errorf("not a version number: %q", version)
+	}
+	if err := a.checkChannel(version); err != nil {
+		return err
 	}
 	if !newerVersion(version, a.currentVersion()) {
 		return fmt.Errorf("%s isn't newer than this version (%s)", version, a.currentVersion())
@@ -500,6 +559,9 @@ func (a *App) DownloadUpdate(version string, allowDirect bool) (DownloadedUpdate
 	var out DownloadedUpdate
 	if !versionPattern.MatchString(version) {
 		return out, fmt.Errorf("not a version number: %q", version)
+	}
+	if err := a.checkChannel(version); err != nil {
+		return out, err
 	}
 	if !newerVersion(version, a.currentVersion()) {
 		return out, fmt.Errorf("%s isn't newer than this version (%s)", version, a.currentVersion())

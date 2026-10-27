@@ -48,7 +48,7 @@ A beta (`vX.Y.Z-beta.N`, the version of the next release) ships what's committed
    ```
    It's published as a pre-release, so `/releases/latest` (what Stable checks) doesn't move. There's no Store package for a beta.
 
-The app on the Beta channel finds betas through the releases feed (`/releases.atom`, the newest 10 releases), so a beta older than the 10 newest releases isn't offered. That's fine: a newer beta or release always is.
+The app on the Beta channel finds betas through the releases feed (`/releases.atom`, the newest 10 releases), so a beta older than the 10 newest releases isn't offered. The feed also lists tags that have no published release (a beta's tag while CI builds it, until it's published, or an abandoned one), so the app offers a beta only once its `SHA256SUMS.txt.minisig` can be downloaded. That's fine: a newer beta or release always is.
 
 ## Audit brief
 
