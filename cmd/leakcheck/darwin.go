@@ -283,7 +283,7 @@ func runDarwin(secs int, selftest, app bool, exe, endpointFlag, childWarp string
 	}
 
 	if app {
-		fmt.Printf("Started Shark BiteTorrent (PID %d); watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); and click Check for updates.\n", root, secs)
+		fmt.Printf("Started Shark BiteTorrent (PID %d); watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); click Check for updates; and paste https://example.com/ in Paste links (its \"getting downloads\" window opens: let the page load, then close it).\n", root, secs)
 		select {
 		case err := <-exited:
 			out, _ := os.ReadFile(appLog.Name())
@@ -543,6 +543,7 @@ type macWatch struct {
 	mu        sync.Mutex
 	pids      map[int]bool
 	asked     map[int]bool    // WebKit processes launchctl answered for
+	resp      map[int]int     // the process launchd says each of those is for
 	failures  map[int]int     // WebKit processes launchctl didn't answer for, how often
 	webkit    map[int]string  // the app's WebKit helpers: PID → name
 	ports     map[string]int  // "tcp:50000", "udp:58017": ports watched processes had open → PID
@@ -553,7 +554,7 @@ type macWatch struct {
 }
 
 func newMacWatch(root int) *macWatch {
-	return &macWatch{pids: map[int]bool{root: true}, asked: map[int]bool{}, failures: map[int]int{},
+	return &macWatch{pids: map[int]bool{root: true}, asked: map[int]bool{}, resp: map[int]int{}, failures: map[int]int{},
 		webkit: map[int]string{}, ports: map[string]int{}, addrs: localAddrs(), webkitAll: map[int]string{},
 		gone: map[int]bool{}, seen: map[int]bool{}}
 }
@@ -683,13 +684,14 @@ func (w *macWatch) refresh() {
 			}
 		} else {
 			w.asked[p] = true
-			if r, _ := strconv.Atoi(string(m[1])); w.pids[r] {
-				w.pids[p], w.webkit[p] = true, webkit[p]
-			}
+			w.resp[p], _ = strconv.Atoi(string(m[1]))
 		}
 		w.mu.Unlock()
 	}
 	w.mu.Lock()
+	// Descendants, and WebKit processes for any watched process, until
+	// nothing new turns up: the browser window's process (a child) may be
+	// found in the same pass as the WebKit processes that are its.
 	for changed := true; changed; {
 		changed = false
 		for p := range w.pids {
@@ -697,6 +699,11 @@ func (w *macWatch) refresh() {
 				if !w.pids[c] {
 					w.pids[c], changed = true, true
 				}
+			}
+		}
+		for p, r := range w.resp {
+			if w.pids[r] && !w.pids[p] {
+				w.pids[p], w.webkit[p], changed = true, w.webkitAll[p], true
 			}
 		}
 	}
