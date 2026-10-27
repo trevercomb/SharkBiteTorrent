@@ -64,13 +64,23 @@ const (
 const clickScript = `(() => {
 	const sells = /premium|pric|upgrade|buy|purchase|subscri|plan|pay|vip|full speed|fast download|high speed|sign ?up|register|log ?in|account|\bapp\b|desktop|extension|install|manager/i;
 	const text = e => (e.textContent || e.value || e.title || '').trim();
-	const els = [...document.querySelectorAll('a, button, input[type=button], input[type=submit]')]
-		.filter(e => e.offsetParent !== null && !e.disabled && /download/i.test(text(e)))
-		.filter(e => !sells.test(text(e)) && !sells.test(e.getAttribute('href') || '') && !sells.test(e.className || ''));
+	// Links and buttons, and elements acting as buttons (role="button" or an
+	// onclick handler); only short labels, as buttons have, so a page-wide
+	// clickable wrapper (often an ad) is never the pick.
+	const els = [...document.querySelectorAll('a, button, input[type=button], input[type=submit], [role=button], [onclick]')]
+		.filter(e => e.offsetParent !== null && !e.disabled && e.getAttribute('aria-disabled') !== 'true' && /download/i.test(text(e)) && text(e).length < 80)
+		.filter(e => !sells.test(text(e)) && !sells.test(e.getAttribute('href') || '') && !sells.test(String(e.className || '')));
 	const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
 	const free = els.filter(e => /free/i.test(text(e)));
 	const pick = (free.length ? free : els).sort((a, b) => area(b) - area(a))[0];
-	if (pick) pick.click();
+	if (!pick) return 'no download button among ' + els.length;
+	// On screen, and the whole press, as a mouse sends it: some pages act on
+	// the press or check the button is visible, which a bare click() isn't.
+	pick.scrollIntoView({ block: 'center' });
+	const r = pick.getBoundingClientRect(), at = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+	for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup']) pick.dispatchEvent(new (t.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent)(t, at));
+	pick.click();
+	return 'clicked ' + pick.tagName.toLowerCase() + ': ' + text(pick).slice(0, 60);
 })()`
 
 func (a *App) openHostPages(pages []hostPage) error {
@@ -208,6 +218,9 @@ const humanCheckScript = `(() => {
 		|| unsolved('iframe[src*="recaptcha"], .g-recaptcha', 'textarea[name="g-recaptcha-response"]');
 })()`
 
+// hostDebug (SBT_LOG_LEVEL=debug) reports what each click did on stderr.
+var hostDebug = os.Getenv("SBT_LOG_LEVEL") == "debug"
+
 // humanGrace: many checks finish by themselves (no click) within a few
 // seconds; only one still waiting after this asks the user.
 const humanGrace = 6 * time.Second
@@ -282,7 +295,9 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 			return nil
 		default:
 		}
-		h.win.Eval(clickScript)
+		if r := h.win.Query(clickScript); hostDebug {
+			fmt.Fprintln(os.Stderr, "file-host window:", r) // diagnosing a page the clicks don't work on
+		}
 		select {
 		case d := <-h.caught:
 			a.addFromHost(p, d.link, d.disposition)
