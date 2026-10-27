@@ -49,6 +49,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"sharkbite/internal/systool"
 	"sharkbite/internal/warp"
 )
@@ -223,6 +225,9 @@ read go || exit 1; exec setpriv --reuid="$2" --regid="$3" --init-groups --inh-ca
 	}
 	if out, err := sudoInput(nftRules(cg, nameservers, dns), "nft", "-f", "-"); err != nil {
 		stop()
+		if msg := staleKernel(); msg != "" {
+			return fatalCode(msg)
+		}
 		return fatalCode("installing the nftables counters: " + err.Error() + ": " + strings.TrimSpace(string(out)))
 	}
 	cleanup := func() {
@@ -440,4 +445,19 @@ func appRunning() bool {
 		}
 	}
 	return false
+}
+
+// staleKernel explains the usual reason the counters can't be installed:
+// the kernel was updated since the last reboot, so the running kernel's
+// modules (nft_socket, nft_redirect) are gone from /lib/modules.
+func staleKernel() string {
+	var u unix.Utsname
+	if unix.Uname(&u) != nil {
+		return ""
+	}
+	release := unix.ByteSliceToString(u.Release[:])
+	if _, err := os.Stat(filepath.Join("/lib/modules", release)); err == nil {
+		return ""
+	}
+	return "the kernel was updated since this computer last started (it runs " + release + ", whose modules are no longer installed), so the firewall counters can't be loaded. Restart the computer, then run the check again"
 }
