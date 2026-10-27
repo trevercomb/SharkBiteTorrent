@@ -63,16 +63,19 @@ const (
 // click() from a script. It never clicks anything that sells something (a
 // host's premium offer is often its biggest "download" button), prefers
 // "free download", then the most prominent "download". Disabled buttons
-// (a countdown that hasn't finished) are left for the next try.
+// (a countdown that hasn't finished) are left for the next try, and so is a
+// countdown shown as an enabled button ("Ready in 7s", "Please wait"):
+// clicking one can start the count again.
 const clickScript = `(() => {
 	const sells = /premium|pric|upgrade|buy|purchase|subscri|plan|pay|vip|full speed|fast download|high speed|sign ?up|register|log ?in|account|\bapp\b|desktop|extension|install|manager/i;
+	const counting = /\b\d+\s*(s|sec|secs|seconds?)\b|please wait|preparing|generating/i;
 	const text = e => (e.textContent || e.value || e.title || '').trim();
 	// Links and buttons, and elements acting as buttons (role="button" or an
 	// onclick handler); only short labels, as buttons have, so a page-wide
 	// clickable wrapper (often an ad) is never the pick.
 	const els = [...document.querySelectorAll('a, button, input[type=button], input[type=submit], [role=button], [onclick]')]
 		.filter(e => e.offsetParent !== null && !e.disabled && e.getAttribute('aria-disabled') !== 'true' && /download/i.test(text(e)) && text(e).length < 80)
-		.filter(e => !sells.test(text(e)) && !sells.test(e.getAttribute('href') || '') && !sells.test(String(e.className || '')));
+		.filter(e => !sells.test(text(e)) && !counting.test(text(e)) && !sells.test(e.getAttribute('href') || '') && !sells.test(String(e.className || '')));
 	const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
 	const free = els.filter(e => /free/i.test(text(e)));
 	const pick = (free.length ? free : els).sort((a, b) => area(b) - area(a))[0];
@@ -266,6 +269,9 @@ func (a *App) waitForHuman(h *hostBrowser, p hostPage, status string) error {
 	pending := func() bool { return len(h.caught) == 0 && h.win.Query(humanCheckScript) == "true" }
 	wait := func(until time.Time) (bool, error) {
 		for pending() {
+			if hostDebug {
+				fmt.Fprintln(os.Stderr, "file-host window: waiting on a human check")
+			}
 			if time.Now().After(until) {
 				return true, nil
 			}
