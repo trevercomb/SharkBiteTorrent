@@ -69,3 +69,19 @@ func TestVerdictLittleTraffic(t *testing.T) {
 		t.Error("engine run with enough traffic didn't pass")
 	}
 }
+
+// Local TCP between two watched processes (the file-host window and the
+// app's proxy) is allowed: both directions are counted. To a local service
+// outside the app (only one direction counted) it's still reported.
+func TestClassifyBetweenOwnProcesses(t *testing.T) {
+	pol := policy{local: map[string]bool{}, endpoints: map[string]bool{"1.2.3.4:51820": true}}
+	flows := []flow{
+		{proto: "tcp", src: "127.0.0.1", dst: "127.0.0.1", sport: 50000, dport: 41000, packets: 30}, // window -> app's proxy
+		{proto: "tcp", src: "127.0.0.1", dst: "127.0.0.1", sport: 41000, dport: 50000, packets: 40}, // proxy -> window
+		{proto: "tcp", src: "127.0.0.1", dst: "127.0.0.1", sport: 50001, dport: 8118, packets: 5},   // to a system proxy
+	}
+	list, _, _, _ := classify(flows, pol)
+	if len(list) != 1 || !strings.Contains(list[0], "127.0.0.1:8118") {
+		t.Errorf("leaks %q, want only the system proxy", list)
+	}
+}

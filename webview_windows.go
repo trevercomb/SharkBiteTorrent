@@ -21,7 +21,7 @@ import (
 // and Chromium uses only the last --disable-features, so ours repeats it.
 // (Don't set Wails' EnableFraudulentWebsiteDetection to avoid that: on macOS
 // it turns on Safe Browsing, which talks to Apple/Google outside the VPN.)
-var webviewArgs = []string{
+var webviewArgs = append([]string{
 	// The window never needs the network: its pages are served in-process,
 	// links open in the user's browser, and all network work is the app's
 	// own Go code (through the VPN). So WebView2 gets no network at all,
@@ -32,6 +32,12 @@ var webviewArgs = []string{
 	// turns off proxy auto-discovery (WPAD).
 	`--host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE wails.localhost"`,
 	"--proxy-server=127.0.0.1:9",
+}, webviewQuietArgs...)
+
+// webviewQuietArgs turn off WebView2's own background calls to Microsoft.
+// The file-host browser window (hostpages_windows.go) uses them too: it does
+// reach the network, but only through the VPN, and only for the pages it's sent to.
+var webviewQuietArgs = []string{
 	// Belt and braces: the individual background features, off.
 	"--disable-background-networking", // component updates, field trials, etc.
 	"--disable-component-update",

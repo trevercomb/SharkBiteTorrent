@@ -49,6 +49,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"sharkbite/internal/systool"
 	"sharkbite/internal/warp"
 )
@@ -223,6 +225,9 @@ read go || exit 1; exec setpriv --reuid="$2" --regid="$3" --init-groups --inh-ca
 	}
 	if out, err := sudoInput(nftRules(cg, nameservers, dns), "nft", "-f", "-"); err != nil {
 		stop()
+		if msg := staleKernel(); msg != "" {
+			return fatalCode(msg)
+		}
 		return fatalCode("installing the nftables counters: " + err.Error() + ": " + strings.TrimSpace(string(out)))
 	}
 	cleanup := func() {
@@ -247,7 +252,7 @@ read go || exit 1; exec setpriv --reuid="$2" --regid="$3" --init-groups --inh-ca
 	start := time.Now()
 
 	if app {
-		fmt.Printf("Started Shark BiteTorrent; watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); and click Check for updates.\n", secs)
+		fmt.Printf("Started Shark BiteTorrent; watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); click Check for updates; and paste https://example.com/ in Paste links (its \"getting downloads\" window opens: let the page load, then close it).\n", secs)
 		select {
 		case err := <-exited:
 			return fatalCode(fmt.Sprintf("the app exited after %ds (%v): %s", int(time.Since(start).Seconds()), err, lastLines(appLog.String(), 10)))
@@ -440,4 +445,19 @@ func appRunning() bool {
 		}
 	}
 	return false
+}
+
+// staleKernel explains the usual reason the counters can't be installed:
+// the kernel was updated since the last reboot, so the running kernel's
+// modules (nft_socket, nft_redirect) are gone from /lib/modules.
+func staleKernel() string {
+	var u unix.Utsname
+	if unix.Uname(&u) != nil {
+		return ""
+	}
+	release := unix.ByteSliceToString(u.Release[:])
+	if _, err := os.Stat(filepath.Join("/lib/modules", release)); err == nil {
+		return ""
+	}
+	return "the kernel was updated since this computer last started (it runs " + release + ", whose modules are no longer installed), so the firewall counters can't be loaded. Restart the computer, then run the check again"
 }

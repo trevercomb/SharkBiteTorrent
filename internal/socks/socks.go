@@ -22,7 +22,13 @@ type Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
 
 type Server struct {
 	Username, Password string
-	Dial               Dialer
+	// NoAuth accepts clients without a password, for Chromium (WebView2),
+	// which can't log in to a SOCKS proxy. Only for a short-lived listener.
+	NoAuth bool
+	// Allow, if set, is asked about each client before anything else (the
+	// browser window's proxy only serves the app's own WebView2 processes).
+	Allow func(net.Conn) bool
+	Dial  Dialer
 
 	// Requests counts CONNECT requests from clients that logged in, so the
 	// app can confirm a search server really sends its traffic through here.
@@ -93,6 +99,9 @@ func (s *Server) handle(c net.Conn) {
 	s.track(c, true)
 	defer s.track(c, false)
 	defer c.Close()
+	if s.Allow != nil && !s.Allow(c) {
+		return
+	}
 
 	c.SetDeadline(time.Now().Add(30 * time.Second))
 	target, err := s.negotiate(c)
@@ -162,11 +171,17 @@ func (s *Server) negotiate(c net.Conn) (string, error) {
 	if _, err := io.ReadFull(c, methods); err != nil {
 		return "", err
 	}
-	hasUserPass := false
+	hasUserPass, hasNone := false, false
 	for _, m := range methods {
 		hasUserPass = hasUserPass || m == 0x02
+		hasNone = hasNone || m == 0x00
 	}
-	if !hasUserPass {
+	switch {
+	case s.NoAuth && hasNone:
+		c.Write([]byte{5, 0x00})
+		s.Requests.Add(1)
+		return readRequest(c)
+	case !hasUserPass:
 		c.Write([]byte{5, 0xff}) // no acceptable method: we always require a password
 		return "", errors.New("client doesn't offer username/password")
 	}
@@ -196,7 +211,10 @@ func (s *Server) negotiate(c net.Conn) (string, error) {
 	}
 	c.Write([]byte{1, 0})
 	s.Requests.Add(1)
+	return readRequest(c)
+}
 
+func readRequest(c net.Conn) (string, error) {
 	// Request: ver cmd rsv atyp addr port
 	var req [4]byte
 	if _, err := io.ReadFull(c, req[:]); err != nil || req[0] != 5 {

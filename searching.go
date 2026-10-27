@@ -107,7 +107,9 @@ func (a *App) SearchTorrents(query, category string) ([]search.Result, error) {
 }
 
 // AddSearchResult downloads a search result's magnet or .torrent and adds it.
-func (a *App) AddSearchResult(r search.Result) error {
+func (a *App) AddSearchResult(r search.Result) error { return a.addSearchResult(r, AddChoice{}) }
+
+func (a *App) addSearchResult(r search.Result, choice AddChoice) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c, _ := a.searchConfig()
@@ -118,5 +120,5 @@ func (a *App) AddSearchResult(r search.Result) error {
 	if tmp != "" {
 		defer os.Remove(tmp) // addSource keeps its own copy
 	}
-	return a.addSource(src)
+	return a.addSourceTo(src, false, choice)
 }

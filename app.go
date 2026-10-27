@@ -95,6 +95,9 @@ type App struct {
 	sfvChecking  map[string]bool              // torrents whose .sfv is being checked
 	sfvResults   map[string]*engine.SFVStatus // .sfv results not yet in a saved scan record
 	verifyCtx    context.Context              // cancelled on disconnect; stops "Verify files"
+	dl           *downloads                   // direct downloads (downloads.go); guarded by mu
+	hostMu       sync.Mutex                   // guards host
+	host         *hostBrowser                 // the file-host browser window, while open (hostpages_*.go)
 }
 
 type VpnStatus struct {
@@ -135,6 +138,12 @@ type Settings struct {
 	// during the download could have damaged them; "all": every download;
 	// "off": never.
 	AutoVerify string `json:"autoVerify"`
+	// AskSaveLocation: adding anything first asks where to save it and
+	// whether to start it now (addchoice.go).
+	AskSaveLocation bool `json:"askSaveLocation"`
+	// RecentDirs: other folders recently chosen there, newest first; changed
+	// as they're used, not through SaveSettings.
+	RecentDirs []string `json:"recentDirs,omitempty"`
 	// Remote control from phones on the home network (remote.go); changed
 	// through SetRemote, not SaveSettings.
 	RemoteEnabled   bool `json:"remoteEnabled"`
@@ -201,6 +210,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.loadSettings()
 	a.loadSaved()
+	a.startDownloads()
 	a.noteUncleanExit()
 	a.handleArgs(os.Args[1:], true)
 	if !storeBuild {
@@ -260,6 +270,7 @@ func (a *App) stopAllNow(ctx context.Context) {
 		a.remoteOpMu.Lock()
 		a.stopRemote()
 		a.remoteOpMu.Unlock()
+		a.stopDownloads()
 		a.disconnect()
 	}()
 	select {
@@ -384,10 +395,18 @@ func (a *App) handleArgs(args []string, external bool) {
 	if a.isShuttingDown() {
 		return // see onSecondInstance
 	}
+	var torrents []string
 	for _, arg := range args {
-		if !strings.HasPrefix(arg, "magnet:") && !strings.EqualFold(filepath.Ext(arg), ".torrent") {
-			continue
+		if strings.HasPrefix(arg, "magnet:") || strings.EqualFold(filepath.Ext(arg), ".torrent") {
+			torrents = append(torrents, arg)
 		}
+	}
+	// Dropped by the user, who wants to choose where each download goes:
+	// the window asks first (external ones wait in their banner anyway).
+	if !external && a.askAdd(torrents) {
+		return
+	}
+	for _, arg := range torrents {
 		a.mu.Lock()
 		ready := a.eng != nil
 		if !ready {
@@ -982,6 +1001,12 @@ func (a *App) addSource(src string) error { return a.addSourceFrom(src, false) }
 // addSourceFrom adds a torrent; an external one waits paused for the user
 // (savedTorrent.Confirm).
 func (a *App) addSourceFrom(src string, external bool) error {
+	return a.addSourceTo(src, external, AddChoice{})
+}
+
+// addSourceTo adds a torrent where the user chose (AddChoice; the default
+// download folder if none), started or paused.
+func (a *App) addSourceTo(src string, external bool, choice AddChoice) error {
 	var pending savedTorrent // what an external source says about itself
 	if strings.HasPrefix(src, "magnet:") {
 		m, err := metainfo.ParseMagnetUri(src)
@@ -1016,9 +1041,7 @@ func (a *App) addSourceFrom(src string, external bool) error {
 		}
 		src = dst
 	}
-	a.mu.Lock()
-	dir := a.settings.DownloadDir
-	a.mu.Unlock()
+	dir := a.dirFor(choice)
 	if external {
 		// Only remembered until the user presses Start (StartTorrent).
 		a.mu.Lock()
@@ -1049,7 +1072,14 @@ func (a *App) addSourceFrom(src string, external bool) error {
 	if err != nil {
 		return err
 	}
-	return a.recordAdded(hash, src, dir)
+	if err := a.recordAdded(hash, src, dir); err != nil {
+		return err
+	}
+	a.noteRecentDir(dir)
+	if choice.Paused {
+		return a.setPaused(hash, true, false)
+	}
+	return nil
 }
 
 // ensureDownloadDir makes sure dir exists to download into. It creates dir
@@ -1477,6 +1507,7 @@ func (a *App) SaveSettings(s Settings) error {
 	// The remote control has its own controls (SetRemote); the Settings
 	// form's copy may be stale.
 	s.RemoteEnabled, s.RemotePort, s.RemoteTailscale = old.RemoteEnabled, old.RemotePort, old.RemoteTailscale
+	s.RecentDirs = old.RecentDirs
 	a.settings = s
 	eng := a.eng
 	a.mu.Unlock()
@@ -1486,6 +1517,7 @@ func (a *App) SaveSettings(s Settings) error {
 	if eng != nil {
 		eng.SetLimits(s.DownLimitKB*1024, s.UpLimitKB*1024)
 	}
+	a.setDownloadLimit(s.DownLimitKB)
 	if old.UpdateChannel != s.UpdateChannel && a.ctx != nil {
 		// An update offered on the other channel no longer applies.
 		runtime.EventsEmit(a.ctx, "update-channel-changed")
@@ -1597,6 +1629,9 @@ func (a *App) loadSettings() {
 		UpdateChannel:   channelStable,
 		ScanDownloads:   true,
 		AutoVerify:      "suspect",
+		// On for everyone, including settings saved by older versions (no
+		// such field there): the dialog's "Don't ask again" turns it off.
+		AskSaveLocation: true,
 	}
 	if data, err := os.ReadFile(filepath.Join(a.configDir, "settings.json")); err == nil {
 		json.Unmarshal(data, &a.settings)
