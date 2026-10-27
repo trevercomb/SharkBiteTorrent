@@ -205,6 +205,21 @@ func classify(flows []flow, p policy) (list, allowed []string, counted, tunnel i
 		leaks[text].packets += n
 	}
 	https, vpnServers := p.documented()
+	// TCP conversations on this computer whose both ends sent counted
+	// packets, i.e. both ends are watched processes: the app's file-host
+	// window talking to the app's own proxy, say. A local service outside
+	// the app (a system proxy) sends nothing that's counted, so traffic to
+	// it still shows up below.
+	sent := map[string]bool{}
+	for _, f := range flows {
+		if f.proto == "tcp" {
+			sent[net.JoinHostPort(f.src, strconv.Itoa(f.sport))+">"+f.to()] = true
+		}
+	}
+	internal := func(f flow) bool {
+		return f.proto == "tcp" && (p.local[f.dst] || net.ParseIP(f.dst).IsLoopback()) &&
+			sent[f.to()+">"+net.JoinHostPort(f.src, strconv.Itoa(f.sport))]
+	}
 	var systemDNS, systemDNSUDP int64
 	for _, f := range flows {
 		counted += f.packets
@@ -232,6 +247,8 @@ func classify(flows []flow, p policy) (list, allowed []string, counted, tunnel i
 			(privateAddr(f.to()) && !tailscaleAddr(net.JoinHostPort(f.src, "0")) ||
 				p.remoteTailscale && tailscaleAddr(f.to()) && tailscaleAddr(net.JoinHostPort(f.src, "0"))):
 			// The remote control (on in Settings) answering a phone.
+		case internal(f):
+			// Between the app's own processes.
 		case p.local[f.dst] || net.ParseIP(f.dst).IsLoopback():
 			// Anything else on this computer: a system proxy or DNS forwarder
 			// listening there would pass traffic on outside the tunnel.
