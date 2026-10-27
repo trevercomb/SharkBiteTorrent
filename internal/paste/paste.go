@@ -120,9 +120,18 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL) (string, *url.U
 	if ct != "" && !strings.HasPrefix(ct, "text/") && ct != "application/xhtml+xml" && ct != "application/json" {
 		return "", nil, errNotPage
 	}
+	if cd, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Disposition")); cd == "attachment" {
+		return "", nil, errNotPage // sent to be saved, whatever its type
+	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxPage))
 	if err != nil {
 		return "", nil, err
+	}
+	// Plain text (not a web page) without a link in it is a file of its
+	// own, such as a .txt or .nfo; with links it's a list of them.
+	if ct != "" && ct != "text/html" && ct != "application/xhtml+xml" &&
+		!urlRe.Match(b) && !magnetRe.Match(b) {
+		return "", nil, errNotPage
 	}
 	return string(b), resp.Request.URL, nil
 }

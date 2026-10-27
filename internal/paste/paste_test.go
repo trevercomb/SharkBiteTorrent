@@ -223,6 +223,31 @@ func TestReadText(t *testing.T) {
 	if got, err := Read(context.Background(), srv.Client(), srv.URL+"/get?id=5"); err != nil || got != srv.URL+"/get?id=5" {
 		t.Errorf("file behind a plain address: got %q, %v", got, err)
 	}
+	// Plain text without links, or anything sent as an attachment, is a
+	// file too; plain text with links is the list.
+	txt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/readme.txt":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("just some text"))
+		case "/page":
+			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Content-Disposition", `attachment; filename="page.html"`)
+			w.Write([]byte(`<a href="https://x.example/a.zip">a</a>`))
+		default:
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte("https://x.example/a.zip\nhttps://x.example/b.zip"))
+		}
+	}))
+	defer txt.Close()
+	for _, p := range []string{"/readme.txt", "/page"} {
+		if got, err := Read(context.Background(), txt.Client(), txt.URL+p); err != nil || got != txt.URL+p {
+			t.Errorf("%s: got %q, %v", p, got, err)
+		}
+	}
+	if got, err := Find(context.Background(), txt.Client(), txt.URL+"/list.txt"); err != nil || len(got) != 2 {
+		t.Errorf("link list: got %+v, %v", got, err)
+	}
 }
 
 // A page that answers 404 (file hosts that show pages to browsers only) is
