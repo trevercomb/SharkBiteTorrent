@@ -1234,8 +1234,12 @@ func (r *pktapResult) forWatched(w *macWatch, local map[string]bool, mdns map[in
 				u.icmp += s.n
 			case k.dport == 53:
 				u.dns += s.n
-			case k.proc == kernelPID && k.proto == "tcp" && kernelFileSharing[k.dport] && privateAddr(net.JoinHostPort(k.dst, "0")):
-				u.fileSharing += s.n // the kernel's own SMB/NFS/AFP client: a NAS
+			case k.proto == "tcp" && kernelFileSharing[k.dport] && privateAddr(net.JoinHostPort(k.dst, "0")):
+				// The kernel's own SMB/NFS/AFP client talking to a network
+				// drive on the home network, tagged with the kernel or with
+				// nothing (reconnecting, NetBIOS on 139): the app has no client
+				// for these; it reaches the drive through the mount.
+				u.fileSharing += s.n
 			default:
 				u.unclaimed += s.n
 				u.flows = append(u.flows, fmt.Sprintf("%s %s > %s (%d packets)", strings.ToUpper(k.proto),

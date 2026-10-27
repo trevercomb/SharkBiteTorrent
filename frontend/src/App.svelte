@@ -67,6 +67,7 @@
     const id = setInterval(refresh, 1000)
     const off = EventsOn('error', (msg: string) => (error = msg))
     const offUpdate = EventsOn('update-available', (info: main.UpdateInfo) => (update = info))
+    const offChannel = EventsOn('update-channel-changed', () => (update = null))
     const offNotice = EventsOn('notice', (msg: string) => (notice = msg))
     // .torrent files dropped on the window, when the user wants to be asked first.
     const offAskAdd = EventsOn('ask-add', (paths: string[]) => addTorrentFiles(paths))
@@ -87,6 +88,7 @@
       clearInterval(id)
       off()
       offUpdate()
+      offChannel()
       offNotice()
       offAskAdd()
     }

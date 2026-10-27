@@ -2,7 +2,7 @@
 
 What changed in each release of Shark BiteTorrent. The release notes on GitHub are taken from this file, so every release's section should say what users will notice.
 
-## [Unreleased]
+## [0.2.41] - 2026-10-27
 
 ### Added
 - **Paste links** (toolbar): paste some text, a web page's address or an encrypted PrivateBin paste, and the app lists every download in it (magnet links, `.torrent` files, file links and links to file-hosting sites) for you to pick from. Pages that list their files relatively (a Linux mirror's folder, an Internet Archive item) work too. Files are listed in natural order (`3.20.2` before `3.20.10`, `part2` before `part10`); long lists get a filter and start with nothing ticked.

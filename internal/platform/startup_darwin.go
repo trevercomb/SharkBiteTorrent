@@ -28,7 +28,20 @@ func agentPath() string {
 var (
 	agentProgram = regexp.MustCompile(`<array>\s*<string>([^<]*)</string>`)
 	agentPrint   = regexp.MustCompile(`<key>` + printKey + `</key>\s*<string>([0-9a-f]*)</string>`)
+	agentStamp   = regexp.MustCompile(`<key>` + stampKey + `</key>\s*<string>([0-9-]*)</string>`)
 )
+
+// stampKey holds the program's size and modification time when it was
+// fingerprinted, so a start only hashes it again when either changed.
+const stampKey = "SharkBiteTorrentProgramStamp"
+
+func stamp(exe string) string {
+	fi, err := os.Stat(exe)
+	if err != nil {
+		return ""
+	}
+	return strconv.FormatInt(fi.Size(), 10) + "-" + strconv.FormatInt(fi.ModTime().UnixNano(), 10)
+}
 
 // printKey holds a fingerprint (SHA-256) of the program the agent was set
 // up for (launchd ignores keys it doesn't know). macOS 13 and later tie a
@@ -67,6 +80,23 @@ func StartupEnabled() bool {
 }
 
 func SetStartup(exe string, on bool) error {
+	print, st := fingerprintStamped(exe)
+	return setStartup(exe, on, print, st)
+}
+
+// fingerprintStamped hashes exe and returns its stamp from before the hash,
+// or "" for the stamp if the file changed while it was being hashed (an
+// update finishing then): the next start hashes it again.
+func fingerprintStamped(exe string) (print, st string) {
+	before := stamp(exe)
+	print = fingerprint(exe)
+	if stamp(exe) != before {
+		before = ""
+	}
+	return print, before
+}
+
+func setStartup(exe string, on bool, print, st string) error {
 	p := agentPath()
 	if !on {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -89,9 +119,11 @@ func SetStartup(exe string, on bool) error {
 	<true/>
 	<key>%s</key>
 	<string>%s</string>
+	<key>%s</key>
+	<string>%s</string>
 </dict>
 </plist>
-`, agentLabel, html.EscapeString(exe), AutostartArg, printKey, fingerprint(exe))
+`, agentLabel, html.EscapeString(exe), AutostartArg, printKey, print, stampKey, st)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
@@ -126,10 +158,25 @@ func RefreshStartup(exe string) {
 	if pm := agentPrint.FindSubmatch(b); pm != nil {
 		recorded = string(pm[1])
 	}
-	if now := fingerprint(exe); now != "" && now != recorded {
-		if SetStartup(exe, true) == nil {
+	if sm := agentStamp.FindSubmatch(b); recorded != "" && sm != nil && string(sm[1]) == stamp(exe) {
+		return // same size and time as when it was fingerprinted: unchanged
+	}
+	// An empty fingerprint (the program couldn't be read) never re-registers:
+	// it would do so at every start.
+	now, st := fingerprintStamped(exe)
+	switch {
+	case now == "":
+	case now != recorded:
+		if setStartup(exe, true, now, st) == nil {
 			reloadAgent()
 		}
+	case st == "":
+		// Changed while hashing: leave it for the next start.
+	default:
+		// Same program, no stamp yet (set up by an older version) or a new
+		// time only: record the stamp so later starts don't hash. launchd
+		// reads the file only when the agent is loaded, so no reload.
+		setStartup(exe, true, now, st)
 	}
 }
 

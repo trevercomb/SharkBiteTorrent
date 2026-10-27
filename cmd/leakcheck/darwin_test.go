@@ -36,6 +36,8 @@ const sampleCapture = `00:59:09.510576 (proc SharkBiteTorrent:16734, out) IP 192
 02:00:00.000007 (out) IP 192.168.4.51 > 162.159.192.8: ICMP 192.168.4.51 udp port 2408 unreachable, length 36
 02:00:00.000008 (out) IP 192.168.4.51.50793 > 203.0.113.10.6881: UDP, length 20
 02:00:00.000009 (proc kernel_task:0, out) IP 192.168.4.51.50794 > 203.0.113.11.80: Flags [S], seq 1, win 65535, length 0
+02:00:00.000011 (out) IP 192.168.4.51.49879 > 192.168.4.26.139: Flags [S], seq 1, win 65535, length 0
+02:00:00.000012 (out) IP 192.168.4.51.49880 > 203.0.113.12.445: Flags [S], seq 1, win 65535, length 0
 02:00:01.000000 (proc tailscaled:300, out) IP 192.168.4.51.41641 > 198.51.100.7.41641: UDP, length 148
 02:00:02.000000 (proc trustd:400, out) IP 192.168.4.51.50795 > 17.253.1.1.80: Flags [S], seq 1, win 65535, length 0
 00:59:40.000000 ARP, Request who-has 192.168.4.1 tell 192.168.4.51, length 28
@@ -170,10 +172,12 @@ func TestDarwinVerdictRules(t *testing.T) {
 	// The planted-style connection (untagged SYN, reply tagged with the
 	// app) and the app's untagged UDP from a port it had open are claimed;
 	// untagged or kernel-tagged traffic nobody claims is listed (the UDP to
-	// .9, the kernel's SYN to .11); DNS, ICMP and the kernel's SMB to the
-	// NAS are counted apart.
-	if un.rescued != 2 || un.dns != 2 || un.icmp != 1 || un.fileSharing != 1 || un.unclaimed != 2 || len(un.flows) != 2 ||
-		!strings.Contains(un.flows[0], "203.0.113.11:80") || !strings.Contains(un.flows[1], "203.0.113.9:6881") {
+	// .9, the kernel's SYN to .11, and SMB to an address on the internet);
+	// DNS, ICMP and file sharing with the NAS on the home network (the
+	// kernel's SMB, and untagged NetBIOS) are counted apart.
+	listed := strings.Join(un.flows, " ")
+	if un.rescued != 2 || un.dns != 2 || un.icmp != 1 || un.fileSharing != 2 || un.unclaimed != 3 || len(un.flows) != 3 ||
+		!strings.Contains(listed, "203.0.113.11:80") || !strings.Contains(listed, "203.0.113.9:6881") || !strings.Contains(listed, "203.0.113.12:445") {
 		t.Errorf("untagged: %+v", un)
 	}
 

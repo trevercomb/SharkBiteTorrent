@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,25 +145,42 @@ func TestCleanUpdateTempOnlyRecordedFile(t *testing.T) {
 	}
 }
 
-func TestNewestPrereleaseIn(t *testing.T) {
+func TestPrereleasesIn(t *testing.T) {
 	feed := `<feed>
 <entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.41"/></entry>
-<entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.41-beta.10"/></entry>
 <entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.41-beta.9"/></entry>
+<entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.41-beta.10"/></entry>
 <entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.42-beta.1;rm"/></entry>
 <entry><link rel="alternate" type="text/html" href="https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v0.2.40"/></entry>
 </feed>`
-	if got := newestPrereleaseIn([]byte(feed)); got != "0.2.41-beta.10" {
+	// Newest first: the caller tries them in order until one is published.
+	if got := strings.Join(prereleasesIn([]byte(feed)), " "); got != "0.2.41-beta.10 0.2.41-beta.9" {
 		t.Errorf("got %q", got)
 	}
-	if got := newestPrereleaseIn([]byte(`<feed><link href="https://github.com/x/releases/tag/v0.2.40"/></feed>`)); got != "" {
+	if got := prereleasesIn([]byte(`<feed><link href="https://github.com/x/releases/tag/v0.2.40"/></feed>`)); len(got) != 0 {
 		t.Errorf("no pre-release: got %q", got)
 	}
 	// Only this repository's links, as hrefs: not another repository's, nor
 	// a link written in a release's description.
 	other := `<feed><entry><link href="https://github.com/someone/fork/releases/tag/v9.9.9-beta.1"/>
 <content>see https://github.com/trevercomb/SharkBiteTorrent/releases/tag/v9.9.8-beta.1" here</content></entry></feed>`
-	if got := newestPrereleaseIn([]byte(other)); got != "" {
+	if got := prereleasesIn([]byte(other)); len(got) != 0 {
 		t.Errorf("foreign link taken: %q", got)
+	}
+}
+
+// A beta is installed or downloaded only on the Beta channel, whatever
+// offered it (a banner from before the channel changed, say).
+func TestCheckChannel(t *testing.T) {
+	a := &App{}
+	if err := a.checkChannel("0.2.42-beta.1"); err == nil {
+		t.Error("a beta was allowed on Stable")
+	}
+	if err := a.checkChannel("0.2.42"); err != nil {
+		t.Errorf("a release was refused on Stable: %v", err)
+	}
+	a.settings.UpdateChannel = channelBeta
+	if err := a.checkChannel("0.2.42-beta.1"); err != nil {
+		t.Errorf("a beta was refused on Beta: %v", err)
 	}
 }

@@ -1518,6 +1518,10 @@ func (a *App) SaveSettings(s Settings) error {
 		eng.SetLimits(s.DownLimitKB*1024, s.UpLimitKB*1024)
 	}
 	a.setDownloadLimit(s.DownLimitKB)
+	if old.UpdateChannel != s.UpdateChannel && a.ctx != nil {
+		// An update offered on the other channel no longer applies.
+		runtime.EventsEmit(a.ctx, "update-channel-changed")
+	}
 	vpnChanged := old.VpnProvider != s.VpnProvider ||
 		(s.VpnProvider == "custom" && old.ForwardedPort != s.ForwardedPort) ||
 		(s.VpnProvider == "account" && (old.AccountProvider != s.AccountProvider || old.AccountRegion != s.AccountRegion))
