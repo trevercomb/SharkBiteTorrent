@@ -2,7 +2,7 @@
 
 What changed in each release of Shark BiteTorrent. The release notes on GitHub are taken from this file, so every release's section should say what users will notice.
 
-## [Unreleased]
+## [0.2.41] - 2026-10-27
 
 ### Added
 - **Beta update channel** (Settings → App → Update channel): choose **Beta** to also be offered previews of the next version, signed and checked like releases. **Stable** (the default) offers releases only. Not in the Microsoft Store version, which the Store updates.

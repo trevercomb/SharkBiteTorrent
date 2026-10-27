@@ -3,7 +3,7 @@
 pkgname=sharkbitetorrent
 # The app's version; a beta (0.3.0-beta.1) becomes pkgver 0.3.0beta.1, since
 # pacman versions can't contain "-" (and sort 0.3.0beta.1 before 0.3.0).
-_version=0.2.40
+_version=0.2.41
 pkgver=${_version//-/}
 pkgrel=1
 pkgdesc="Lightweight BitTorrent client with a built-in per-app VPN (WARP/WireGuard)"
