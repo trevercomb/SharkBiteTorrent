@@ -2,13 +2,17 @@
 
 What changed in each release of Shark BiteTorrent. The release notes on GitHub are taken from this file, so every release's section should say what users will notice.
 
-## [0.2.41] - 2026-10-27
+## [Unreleased]
 
 ### Added
 - **Paste links** (toolbar): paste some text, a web page's address or an encrypted PrivateBin paste, and the app lists every download in it (magnet links, `.torrent` files, file links and links to file-hosting sites) for you to pick from. Pages that list their files relatively (a Linux mirror's folder, an Internet Archive item) work too. Files are listed in natural order (`3.20.2` before `3.20.10`, `part2` before `part10`); long lists get a filter and start with nothing ticked.
 - **Direct downloads**, through the VPN like torrents: several connections per file, resumed after a restart or a dropped connection, waiting for the VPN when it's down (never your normal connection), and checked for malware when finished. They're listed above your torrents; select several (Ctrl/Shift+click) to pause, resume or remove them together, and **Clear finished** takes completed ones off the list (their files stay).
 - **File hosts that only work in a real browser** open in a browser window of the app's own whose traffic goes through the VPN (on Linux it uses WebKitGTK and on macOS WebKit, the engines already behind the app's window; macOS 14 or later). It clicks each page's download button, blocks pop-ups and hands the download to the app. If a site asks you to prove you're human, the window says so and you do it there; the app never tries to get around such checks. If a download link expires, **Get a new link** opens the page again and the download carries on where it was.
 - **Ask where to save each download** (Settings → Downloads, on by default): before anything is added, choose its folder (the default, one of the last five you used, or another) and whether to start it now or add it paused. *Don't ask again* turns it off. Links opened from outside the app get the folder choice in their banner.
+
+## [0.2.41] - 2026-10-27
+
+### Added
 - **Beta update channel** (Settings → App → Update channel): choose **Beta** to also be offered previews of the next version, signed and checked like releases. **Stable** (the default) offers releases only. Not in the Microsoft Store version, which the Store updates.
 
 ### Changed
