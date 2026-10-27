@@ -214,7 +214,7 @@ func (w *Window) run(ready chan<- error) {
 			return w.o.OnDownload(d)
 		}
 		return DownloadChoice{Cancel: true}
-	}) || !WebOnly(c) || !DenyPermissions(c) {
+	}) || !WebOnly(c) || !DenyPermissions(c) || !noWebRTC(c) {
 		pDestroyWindow.Call(hwnd)
 		ready <- errors.New("this WebView2 version is too old for the browser window: update Microsoft Edge WebView2")
 		return
@@ -230,6 +230,20 @@ func (w *Window) run(ready chan<- error) {
 		pTranslate.Call(uintptr(unsafe.Pointer(&m)))
 		pDispatch.Call(uintptr(unsafe.Pointer(&m)))
 	}
+}
+
+// noRTCScript removes WebRTC from every page and frame before their scripts
+// run (as on macOS; Linux turns it off in WebKit). The proxy-only policy
+// switch above keeps WebRTC's own traffic in the proxy, but a page creating
+// a connection still made WebView2 start announcing a made-up .local name
+// for this computer with mDNS, on the home network and outside the VPN
+// (an ad on a file host did; the release leak test caught it).
+const noRTCScript = `for (const n of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCSessionDescription', 'RTCIceCandidate']) { try { delete window[n]; } catch (e) {} }`
+
+// noWebRTC adds noRTCScript to every document; false if it couldn't be.
+func noWebRTC(c *edge.Chromium) bool {
+	wv, err := c.GetController().GetCoreWebView2()
+	return err == nil && wv != nil && wv.AddScriptToExecuteOnDocumentCreated(noRTCScript, nil) == nil
 }
 
 // do runs fn on the window's thread; false if the window is gone.

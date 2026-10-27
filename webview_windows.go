@@ -60,6 +60,11 @@ var webviewQuietArgs = []string{
 		"TextPrediction", "EditorProofing",
 		"msEdgeEditorEnvironmentEndpointDetection", "msEdgeEditorSpellcheckerDlpCheck",
 		"AutofillServerCommunication", "OptimizationHints", "MediaRouter", "Translate", "msEdgeTranslate",
+		// WebRTC's mDNS names for this computer: announced on the home
+		// network, outside the VPN. The browser window also removes WebRTC
+		// from its pages (internal/browser noRTCScript); this covers a page
+		// that gets it back from a fresh frame.
+		"WebRtcHideLocalIpsWithMdns",
 	}, ","),
 }
 

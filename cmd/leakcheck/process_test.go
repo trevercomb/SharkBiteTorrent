@@ -83,7 +83,7 @@ func TestRootWholeLife(t *testing.T) {
 }
 
 func TestCheckBrowserArgs(t *testing.T) {
-	quiet := "--disable-features=msSmartScreenProtection,msImplicitSignin,msEdgeOSAccountInfoSubstrate,TextPrediction"
+	quiet := "--disable-features=msSmartScreenProtection,msImplicitSignin,msEdgeOSAccountInfoSubstrate,TextPrediction,WebRtcHideLocalIpsWithMdns"
 	main := `msedgewebview2.exe --embedded-browser-webview=1 --host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE localhost" --proxy-server=127.0.0.1:9 ` + quiet
 	host := `msedgewebview2.exe --embedded-browser-webview=1 --proxy-server=socks5://127.0.0.1:51234 --host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" --disable-quic --force-webrtc-ip-handling-policy=disable_non_proxied_udp --proxy-bypass-list=<-loopback> ` + quiet
 	set := func(cmds ...string) *pidSet {

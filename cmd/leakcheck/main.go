@@ -1016,7 +1016,7 @@ func checkBrowserArgs(s *pidSet) string {
 				last = v
 			}
 		}
-		for _, need := range []string{"msImplicitSignin", "msEdgeOSAccountInfoSubstrate", "TextPrediction", "msSmartScreenProtection"} {
+		for _, need := range []string{"msImplicitSignin", "msEdgeOSAccountInfoSubstrate", "TextPrediction", "msSmartScreenProtection", "WebRtcHideLocalIpsWithMdns"} {
 			if !strings.Contains(","+last+",", ","+need+",") {
 				return "WebView2 (PID " + strconv.Itoa(pid) + ") didn't get the app's --disable-features (missing " + need + "); its background features are on"
 			}
