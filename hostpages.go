@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -46,6 +47,7 @@ type hostBrowser struct {
 	wake    chan struct{}
 	loaded  chan string
 	caught  chan caughtDownload
+	popups  chan struct{} // a pop-up was blocked (an ad that took the click)
 	stopped bool
 }
 
@@ -55,6 +57,7 @@ const (
 	pageLoadWait   = 45 * time.Second
 	clickTries     = 25 // two steps, clicks taken by ads, and a countdown: one host took 14 tries
 	clickWait      = 3 * time.Second
+	adClickWait    = time.Second // the click only opened an ad: the next one may do more
 	userClickWait  = 3 * time.Minute
 	humanCheckWait = 10 * time.Minute
 )
@@ -64,11 +67,12 @@ const (
 // host's premium offer is often its biggest "download" button), prefers
 // "free download", then the most prominent "download". Disabled buttons
 // (a countdown that hasn't finished) are left for the next try, and so is a
-// countdown shown as an enabled button ("Ready in 7s", "Please wait"):
-// clicking one can start the count again.
+// countdown anywhere on the page ("Ready in 7s", "Preparing your
+// download", sometimes next to a download button that still looks
+// clickable): clicking during one can start the count again.
 const clickScript = `(() => {
 	const sells = /premium|pric|upgrade|buy|purchase|subscri|plan|pay|vip|full speed|fast download|high speed|sign ?up|register|log ?in|account|\bapp\b|desktop|extension|install|manager/i;
-	const counting = /\b\d+\s*(s|sec|secs|seconds?)\b|please wait|preparing|generating/i;
+	const counting = /\b\d+\s*(s|sec|secs|seconds?|%)(\W|$)|please wait|preparing|generating/i;
 	const text = e => (e.textContent || e.value || e.title || '').trim();
 	// Links and buttons, and elements acting as buttons (role="button" or an
 	// onclick handler); only short labels, as buttons have, so a page-wide
@@ -76,6 +80,14 @@ const clickScript = `(() => {
 	const els = [...document.querySelectorAll('a, button, input[type=button], input[type=submit], [role=button], [onclick]')]
 		.filter(e => e.offsetParent !== null && !e.disabled && e.getAttribute('aria-disabled') !== 'true' && /download/i.test(text(e)) && text(e).length < 80)
 		.filter(e => !sells.test(text(e)) && !counting.test(text(e)) && !sells.test(e.getAttribute('href') || '') && !sells.test(String(e.className || '')));
+	// A countdown or progress text that changed since the last try: wait.
+	// Unchanged, it's instructions or a finished status ("Generating secure
+	// link Done"), which mustn't stop the clicks.
+	const shown = e => e.offsetParent !== null && e.getBoundingClientRect().width > 0;
+	const counts = [...document.querySelectorAll('body *')].filter(e => e.children.length <= 3 && text(e).length < 80 && counting.test(text(e)) && shown(e)).map(text).join(' | ');
+	const before = window.__sbtCounts;
+	window.__sbtCounts = counts;
+	if (counts && counts !== before) return 'counting down: ' + counts.slice(0, 80);
 	const area = e => { const r = e.getBoundingClientRect(); return r.width * r.height; };
 	const free = els.filter(e => /free/i.test(text(e)));
 	const pick = (free.length ? free : els).sort((a, b) => area(b) - area(a))[0];
@@ -122,6 +134,7 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		wake:   make(chan struct{}, 1),
 		loaded: make(chan string, 8),
 		caught: make(chan caughtDownload, 8),
+		popups: make(chan struct{}, 1),
 		proxy:  &socks.Server{Dial: a.hostDial},
 	}
 	o := browser.Options{
@@ -132,6 +145,15 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		OnLoaded: func(url string) {
 			select {
 			case h.loaded <- url:
+			default:
+			}
+		},
+		OnPopup: func(nw browser.NewWindow) {
+			if u, err := url.Parse(nw.URL); err == nil {
+				hostLog("pop-up blocked:", u.Host)
+			}
+			select {
+			case h.popups <- struct{}{}:
 			default:
 			}
 		},
@@ -256,6 +278,12 @@ const humanCheckScript = `(() => {
 // hostDebug (SBT_LOG_LEVEL=debug) reports what each click did on stderr.
 var hostDebug = os.Getenv("SBT_LOG_LEVEL") == "debug"
 
+func hostLog(v ...any) {
+	if hostDebug {
+		fmt.Fprintln(os.Stderr, append([]any{time.Now().Format("15:04:05"), "file-host window:"}, v...)...)
+	}
+}
+
 // humanGrace: many checks finish by themselves (no click) within a few
 // seconds; only one still waiting after this asks the user.
 const humanGrace = 6 * time.Second
@@ -269,9 +297,7 @@ func (a *App) waitForHuman(h *hostBrowser, p hostPage, status string) error {
 	pending := func() bool { return len(h.caught) == 0 && h.win.Query(humanCheckScript) == "true" }
 	wait := func(until time.Time) (bool, error) {
 		for pending() {
-			if hostDebug {
-				fmt.Fprintln(os.Stderr, "file-host window: waiting on a human check")
-			}
+			hostLog("waiting on a human check")
 			if time.Now().After(until) {
 				return true, nil
 			}
@@ -333,13 +359,22 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 			return nil
 		default:
 		}
-		if r := h.win.Query(clickScript); hostDebug {
-			fmt.Fprintln(os.Stderr, "file-host window:", r) // diagnosing a page the clicks don't work on
+		select {
+		case <-h.popups:
+		default:
 		}
+		hostLog(h.win.Query(clickScript)) // diagnosing a page the clicks don't work on
 		select {
 		case d := <-h.caught:
 			a.addFromHost(p, d.link, d.disposition)
 			return nil
+		case <-h.popups:
+			select {
+			case d := <-h.caught:
+				a.addFromHost(p, d.link, d.disposition)
+				return nil
+			case <-time.After(adClickWait):
+			}
 		case <-time.After(clickWait):
 		case <-h.win.Done():
 			return errWindowClosed
