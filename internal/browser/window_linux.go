@@ -345,6 +345,9 @@ func goResult(id C.gint64, json *C.char) {
 //export goClosed
 func goClosed() {}
 
+// wait waits until the window is gone.
+func (w *Window) wait() { <-w.closed }
+
 // Done is closed once the window is gone.
 func (w *Window) Done() <-chan struct{} { return w.closed }
 

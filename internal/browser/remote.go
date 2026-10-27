@@ -1,4 +1,4 @@
-//go:build windows || (linux && cgo)
+//go:build windows || (linux && cgo) || (darwin && cgo)
 
 package browser
 
@@ -23,8 +23,8 @@ import (
 const HelperArg = "--browser-window"
 
 type helperConfig struct {
-	Proxy, DataDir, Title string
-	Args                  []string
+	Proxy, ProxyUser, ProxyPass, DataDir, Title string
+	Args                                        []string
 }
 
 // command is the app → window message; event is window → app.
@@ -59,7 +59,7 @@ func ServeHelper(in io.Reader, out io.Writer) error {
 		mu.Unlock()
 	}
 	w, err := Open(Options{
-		Proxy: cfg.Proxy, DataDir: cfg.DataDir, Title: cfg.Title, Args: cfg.Args,
+		Proxy: cfg.Proxy, ProxyUser: cfg.ProxyUser, ProxyPass: cfg.ProxyPass, DataDir: cfg.DataDir, Title: cfg.Title, Args: cfg.Args,
 		OnLoaded: func(url string) { send(event{Ev: "loaded", URL: url}) },
 		OnPopup:  func(nw NewWindow) { send(event{Ev: "popup", URL: nw.URL}) },
 		OnDownload: func(d Download) DownloadChoice {
@@ -97,7 +97,7 @@ func ServeHelper(in io.Reader, out io.Writer) error {
 			}
 		}
 	}()
-	<-w.Done()
+	w.wait() // on macOS, the window runs on this (the main) thread
 	return nil
 }
 
@@ -129,7 +129,7 @@ func Start(exe string, o Options) (*Remote, error) {
 		return nil, fmt.Errorf("couldn't start the browser window: %w", err)
 	}
 	r := &Remote{o: o, cmd: cmd, stdin: stdin, enc: json.NewEncoder(stdin), titles: map[int64]chan string{}, done: make(chan struct{})}
-	if err := r.enc.Encode(helperConfig{Proxy: o.Proxy, DataDir: o.DataDir, Title: o.Title, Args: o.Args}); err != nil {
+	if err := r.enc.Encode(helperConfig{Proxy: o.Proxy, ProxyUser: o.ProxyUser, ProxyPass: o.ProxyPass, DataDir: o.DataDir, Title: o.Title, Args: o.Args}); err != nil {
 		cmd.Process.Kill()
 		return nil, err
 	}

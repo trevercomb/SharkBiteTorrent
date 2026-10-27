@@ -239,6 +239,9 @@ func (w *Window) do(fn func()) bool {
 	return true
 }
 
+// wait waits until the window is gone.
+func (w *Window) wait() { <-w.closed }
+
 // Done is closed once the window is gone.
 func (w *Window) Done() <-chan struct{} { return w.closed }
 

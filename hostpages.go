@@ -1,4 +1,4 @@
-//go:build windows || (linux && cgo)
+//go:build windows || (linux && cgo) || (darwin && cgo)
 
 package main
 
@@ -116,10 +116,9 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		wake:   make(chan struct{}, 1),
 		loaded: make(chan string, 8),
 		caught: make(chan caughtDownload, 8),
-		proxy:  &socks.Server{NoAuth: true, Allow: browser.FromThisApp, Dial: a.searchDial},
+		proxy:  &socks.Server{Dial: a.searchDial},
 	}
-	go h.proxy.Serve(ln)
-	h.win, err = browser.Start(a.exe, browser.Options{
+	o := browser.Options{
 		Proxy:   ln.Addr().String(),
 		DataDir: filepath.Join(a.configDir, "browser"),
 		Title:   "Shark BiteTorrent: getting downloads",
@@ -137,7 +136,10 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 			}
 			return browser.DownloadChoice{Cancel: true} // the app downloads it itself
 		},
-	})
+	}
+	browser.GuardProxy(h.proxy, &o)
+	go h.proxy.Serve(ln)
+	h.win, err = browser.Start(a.exe, o)
 	if err != nil {
 		h.proxy.Close()
 		return nil, err

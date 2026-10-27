@@ -1,12 +1,16 @@
 package browser
 
-// Shared by the Windows (WebView2) and Linux (WebKitGTK) windows.
+// Shared by the Windows (WebView2), Linux (WebKitGTK) and macOS (WKWebView)
+// windows.
 
 // Options for a browser window.
 type Options struct {
 	// Proxy is the 127.0.0.1:port of a SOCKS5 proxy without a password
 	// (Chromium can't log in to one) that sends everything through the VPN.
 	Proxy string
+	// ProxyUser and ProxyPass log in to it, where the window can (macOS;
+	// see GuardProxy).
+	ProxyUser, ProxyPass string
 	// DataDir holds the window's own browser profile (cookies, cache).
 	DataDir string
 	Title   string

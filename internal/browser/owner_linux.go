@@ -3,6 +3,8 @@
 package browser
 
 import (
+	"sharkbite/internal/socks"
+
 	"bufio"
 	"fmt"
 	"net"
@@ -17,6 +19,14 @@ import (
 // WebKitGTK's network process under it) may send traffic through the VPN
 // with it. Linux: the connection's socket is found in /proc/net/tcp, its
 // owner by the socket in a process's fd table, then up the parent chain.
+
+// GuardProxy sets up the browser window's proxy s and the window's options
+// o so that only the window can use the proxy: Chromium (WebView2) can't log
+// in to a SOCKS proxy, so the proxy has no password and checks who's
+// connecting instead (on Linux, the same check, for WebKitGTK).
+func GuardProxy(s *socks.Server, o *Options) {
+	s.NoAuth, s.Allow = true, FromThisApp
+}
 
 // FromThisApp reports whether the other end of c, a connection accepted on
 // 127.0.0.1, belongs to this process or one it started (directly or not).

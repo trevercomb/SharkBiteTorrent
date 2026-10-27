@@ -1,10 +1,11 @@
-//go:build !windows && !(linux && cgo)
+//go:build !windows && !(linux && cgo) && !(darwin && cgo)
 
 package main
 
 import "errors"
 
-// The file-host browser window needs Windows or Linux with WebKitGTK (hostpages.go).
+// The file-host browser window needs Windows, Linux with WebKitGTK or macOS
+// (hostpages.go), and cgo on the last two.
 
 type hostPage struct {
 	URL    string
@@ -21,7 +22,7 @@ func (a *App) openHostPages([]hostPage) error {
 
 func (a *App) closeHostPages() {}
 
-// The browser window's process exists on Windows only.
+// The browser window's process doesn't exist in this build.
 const browserWindowArg = "--browser-window"
 
-func runBrowserWindow() error { return errors.New("the browser window is Windows-only") }
+func runBrowserWindow() error { return errors.New("the browser window isn't in this build") }
