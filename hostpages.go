@@ -199,7 +199,10 @@ func (a *App) driveHostBrowser(h *hostBrowser) {
 // field once it has).
 const humanCheckScript = `(() => {
 	if (/just a moment|attention required|checking your browser|verify you are human|ddos-guard/i.test(document.title)) return true;
-	const unsolved = (box, answer) => !!document.querySelector(box) && !((document.querySelector(answer) || {}).value);
+	// Only a box a person can see and click: ad scripts load invisible
+	// reCAPTCHA frames (recaptcha/api2/aframe) that never get an answer.
+	const visible = e => { const r = e.getBoundingClientRect(); return e.offsetParent !== null && r.width > 20 && r.height > 20; };
+	const unsolved = (box, answer) => [...document.querySelectorAll(box)].some(visible) && !((document.querySelector(answer) || {}).value);
 	return unsolved('iframe[src*="challenges.cloudflare.com"], .cf-turnstile', 'input[name="cf-turnstile-response"]')
 		|| unsolved('iframe[src*="hcaptcha.com"], .h-captcha', 'textarea[name="h-captcha-response"]')
 		|| unsolved('iframe[src*="recaptcha"], .g-recaptcha', 'textarea[name="g-recaptcha-response"]');
@@ -213,7 +216,9 @@ const humanGrace = 6 * time.Second
 // user to do the check in the window if it is. The app never tries to get
 // around such a check.
 func (a *App) waitForHuman(h *hostBrowser, p hostPage, status string) error {
-	pending := func() bool { return h.win.Query(humanCheckScript) == "true" }
+	// A download already caught means nobody needs to prove anything (the
+	// page started it by itself, or the check was passed): the caller takes it.
+	pending := func() bool { return len(h.caught) == 0 && h.win.Query(humanCheckScript) == "true" }
 	wait := func(until time.Time) (bool, error) {
 		for pending() {
 			if time.Now().After(until) {

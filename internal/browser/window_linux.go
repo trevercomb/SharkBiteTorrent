@@ -43,6 +43,9 @@ static int report_download(WebKitURIResponse *resp) {
 		(char *)orempty(webkit_uri_response_get_mime_type(resp)), (gint64)webkit_uri_response_get_content_length(resp));
 }
 
+// A response it can't show, or one sent as an attachment, is a download,
+// from the page or any frame in it (pages often start theirs from a hidden
+// frame), as WebView2 reports them on Windows.
 static gboolean on_decide_policy(WebKitWebView *v, WebKitPolicyDecision *dec, WebKitPolicyDecisionType t, gpointer d) {
 	if (t == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
 		WebKitNavigationAction *a = webkit_navigation_policy_decision_get_navigation_action(WEBKIT_NAVIGATION_POLICY_DECISION(dec));
@@ -57,7 +60,6 @@ static gboolean on_decide_policy(WebKitWebView *v, WebKitPolicyDecision *dec, We
 		SoupMessageHeaders *h = webkit_uri_response_get_http_headers(resp);
 		const char *cd = h ? soup_message_headers_get_one(h, "Content-Disposition") : NULL;
 		gboolean attachment = cd && g_ascii_strncasecmp(cd, "attachment", 10) == 0;
-		if (!webkit_response_policy_decision_is_main_frame_main_resource(rd)) return FALSE;
 		if (attachment || !webkit_response_policy_decision_is_mime_type_supported(rd)) {
 			if (report_download(resp)) webkit_policy_decision_ignore(dec); // the app downloads it itself
 			else webkit_policy_decision_download(dec);
