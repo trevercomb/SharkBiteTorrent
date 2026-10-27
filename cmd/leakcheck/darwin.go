@@ -44,8 +44,12 @@ package main
 // one that matters is certificate checking: macOS checks TLS certificates
 // in trustd, which may fetch revocation data or missing certificates
 // itself. The app verifies certificates in Go with its own roots on macOS,
-// so it shouldn't cause any; the check lists what trustd and the like sent
-// during the run, which may have been for any program.
+// and Paste links' browser window (WebKit, which asks macOS) tells it not
+// to go online, so neither should cause any. Safe Browsing (off in the
+// window) and media playback (blocked in it) also work in services of
+// their own. The check lists what all these sent during the run, which may
+// have been for any program: if one sent anything while the window was
+// open, run it again without the window to tell.
 //
 // It runs as the logged-in user and uses sudo (asked once) for tcpdump, log
 // stream, launchctl procinfo and flushing the DNS cache.
@@ -446,7 +450,9 @@ func (r *pktapResult) showPlanted(w *macWatch) {
 
 // systemServices check certificates, signatures and the like for other
 // programs, in their own name (see the top of this file).
-var systemServices = []string{"trustd", "ocspd", "securityd", "syspolicyd", "nsurlsessiond"}
+var systemServices = []string{"trustd", "ocspd", "securityd", "syspolicyd", "nsurlsessiond",
+	"com.apple.Safari", // Safe Browsing's service (com.apple.Safari.SafeBrowsing.Service, cut short by pktap)
+	"mediaplaybackd"}
 
 // showSystemActivity lists what those services sent to other computers,
 // and how many lookups they made, during the run.
@@ -455,7 +461,7 @@ func (r *pktapResult) showSystemActivity(reqs []mdnsRequest) {
 		var packets int64
 		dests := map[string]bool{}
 		for k, s := range r.counts {
-			if k.dir == "in" || r.procNames[k.proc] != name || k.proto == "icmp" || k.proto == "ipv6-icmp" {
+			if k.dir == "in" || !strings.HasPrefix(r.procNames[k.proc], name) || k.proto == "icmp" || k.proto == "ipv6-icmp" {
 				continue
 			}
 			packets += s.n
@@ -463,7 +469,7 @@ func (r *pktapResult) showSystemActivity(reqs []mdnsRequest) {
 		}
 		lookups := 0
 		for _, q := range reqs {
-			if clientName(r, q.client) == name {
+			if strings.HasPrefix(clientName(r, q.client), name) {
 				lookups++
 			}
 		}

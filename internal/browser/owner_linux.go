@@ -3,8 +3,6 @@
 package browser
 
 import (
-	"sharkbite/internal/socks"
-
 	"bufio"
 	"fmt"
 	"net"
@@ -12,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"sharkbite/internal/socks"
 )
 
 // The browser window's proxy has no password, so it checks who's connecting

@@ -4,7 +4,7 @@ package browser
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework Cocoa -framework WebKit -framework Network
+#cgo LDFLAGS: -framework Cocoa -framework WebKit -framework Network -framework Security
 #include <stdlib.h>
 #include "window_darwin.h"
 */
@@ -64,6 +64,10 @@ func Open(o Options) (*Window, error) {
 		return nil, errors.New("links to file hosts' pages need macOS 14 or later (the browser window); direct file links and torrents work")
 	case 2:
 		return nil, errors.New("the browser window must open on the main thread")
+	case 3:
+		return nil, errors.New("the browser window can't turn off WebRTC on this version of macOS, so it doesn't open; direct file links and torrents work")
+	case 4:
+		return nil, errors.New("the browser window couldn't set up what it blocks")
 	}
 	current = w
 	return w, nil

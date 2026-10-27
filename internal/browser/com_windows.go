@@ -6,6 +6,7 @@
 package browser
 
 import (
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -20,8 +21,19 @@ import (
 // 0) and follow WebView2.h: ICoreWebView2 has 58 methods after IUnknown,
 // ICoreWebView2_2 adds 7, _3 adds 5, then _4.
 const (
-	slotAddNewWindowRequested = 44 // ICoreWebView2
-	slotAddDownloadStarting   = 75 // ICoreWebView2_4
+	slotAddNavigationStarting      = 7  // ICoreWebView2
+	slotAddFrameNavigationStarting = 17 // ICoreWebView2
+	slotAddPermissionRequested     = 23 // ICoreWebView2
+	slotAddNewWindowRequested      = 44 // ICoreWebView2
+	slotAddDownloadStarting        = 75 // ICoreWebView2_4
+
+	// ICoreWebView2NavigationStartingEventArgs
+	slotNavGetURI    = 3
+	slotNavPutCancel = 8
+
+	// ICoreWebView2PermissionRequestedEventArgs
+	slotPermPutState = 7
+	permissionDeny   = 2 // COREWEBVIEW2_PERMISSION_STATE_DENY
 
 	// ICoreWebView2NewWindowRequestedEventArgs
 	slotNewWindowGetURI        = 3
@@ -173,6 +185,43 @@ func OnNewWindow(c *edge.Chromium, fn func(NewWindow)) bool {
 	})
 	var token int64
 	return !failed(call(wv, slotAddNewWindowRequested, uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(&token))))
+}
+
+// WebOnly cancels every navigation, of the page or a frame in it, to
+// anything but a web page: another app's link (magnet:, mailto:…) would
+// otherwise be offered to that app, outside the VPN.
+func WebOnly(c *edge.Chromium) bool {
+	wv := webviewOf(c)
+	if wv == nil {
+		return false
+	}
+	h := newHandler(func(args unsafe.Pointer) {
+		uri := strings.ToLower(getString(args, slotNavGetURI))
+		scheme, _, _ := strings.Cut(uri, ":")
+		switch scheme {
+		case "http", "https", "about", "data", "blob":
+		default:
+			putBool(args, slotNavPutCancel, true)
+		}
+	})
+	var t1, t2 int64
+	return !failed(call(wv, slotAddNavigationStarting, uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(&t1)))) &&
+		!failed(call(wv, slotAddFrameNavigationStarting, uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(&t2))))
+}
+
+// DenyPermissions refuses everything a page asks permission for (location,
+// camera, notifications…): Windows' location service, for one, works outside
+// the VPN.
+func DenyPermissions(c *edge.Chromium) bool {
+	wv := webviewOf(c)
+	if wv == nil {
+		return false
+	}
+	h := newHandler(func(args unsafe.Pointer) {
+		call(args, slotPermPutState, permissionDeny)
+	})
+	var token int64
+	return !failed(call(wv, slotAddPermissionRequested, uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(&token))))
 }
 
 // OnDownload reports each download the page starts; the browser's own

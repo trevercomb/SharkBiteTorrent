@@ -151,7 +151,7 @@ func main() {
 		os.Exit(1)
 	}
 	var seen sync.Map
-	srv := &socks.Server{NoAuth: true, Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+	srv := &socks.Server{NoAuth: true, Allow: browser.FromThisApp, Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if _, dup := seen.LoadOrStore(addr, true); !dup {
 			fmt.Println("[proxy] connect", addr)
 		}

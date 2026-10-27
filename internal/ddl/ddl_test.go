@@ -295,13 +295,17 @@ func TestNames(t *testing.T) {
 	m.Close()
 
 	for in, want := range map[string]string{
-		"../../evil.exe":    "evil.exe",
-		`C:\x\y.zip`:        "y.zip",
-		"a<b>c:d.rar":       "a_b_c_d.rar",
-		"CON.txt":           "_CON.txt",
-		"name. ":            "name",
-		"..":                "",
-		"part1.rar\x00.txt": "part1.rar_.txt",
+		"../../evil.exe":       "evil.exe",
+		`C:\x\y.zip`:           "y.zip",
+		"a<b>c:d.rar":          "a_b_c_d.rar",
+		"CON.txt":              "_CON.txt",
+		"name. ":               "name",
+		"..":                   "",
+		"part1.rar\x00.txt":    "part1.rar_.txt",
+		"invoice\u202efdp.exe": "invoicefdp.exe",
+		"a\u200bb.zip":         "ab.zip",
+		".bashrc":              "bashrc",
+		"...":                  "",
 	} {
 		if got := SafeName(in); got != want {
 			t.Errorf("SafeName(%q) = %q, want %q", in, got, want)
@@ -396,6 +400,18 @@ func TestUnsafeSavedName(t *testing.T) {
 	st := waitState(t, m, "a", Failed)
 	if !strings.Contains(st.Error, "usable file name") {
 		t.Errorf("error %q", st.Error)
+	}
+	// Remove with the file never deletes outside the folder, whatever the
+	// saved list says.
+	outside := filepath.Join(filepath.Dir(dir), "keep.txt")
+	os.WriteFile(outside, []byte("keep"), 0o644)
+	defer os.Remove(outside)
+	m.Add(Spec{ID: "b", URL: srv.URL + "/x", Dir: dir, Name: "../keep.txt", Done: true})
+	if err := m.Remove("b", true); err == nil {
+		t.Error("removed a file outside the folder")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("the file outside is gone: %v", err)
 	}
 	for _, n := range []string{"ok.iso", "part1.rar"} {
 		if !plainName(n) {

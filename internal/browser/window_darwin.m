@@ -46,6 +46,13 @@ static SBDenyAll *denyAll;
 
 // <a download> (and other downloads WebKit decides on before a response).
 - (void)webView:(WKWebView *)v decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
+	// Web pages only: no other app's links (magnet:, mailto:…), which
+	// would hand them to a program outside the VPN.
+	NSString *scheme = a.request.URL.scheme.lowercaseString;
+	if (![@[@"http", @"https", @"about", @"blob", @"data"] containsObject:scheme ?: @""]) {
+		h(WKNavigationActionPolicyCancel);
+		return;
+	}
 	if (a.shouldPerformDownload) {
 		if (goDownload(cstr(a.request.URL.absoluteString), "", "", -1)) h(WKNavigationActionPolicyCancel);
 		else h(WKNavigationActionPolicyDownload);
@@ -76,7 +83,26 @@ static SBDenyAll *denyAll;
 - (void)webView:(WKWebView *)v navigationResponse:(WKNavigationResponse *)r didBecomeDownload:(WKDownload *)d { d.delegate = self; }
 - (void)download:(WKDownload *)d decideDestinationUsingResponse:(NSURLResponse *)r suggestedFilename:(NSString *)name completionHandler:(void (^)(NSURL *))h {
 	NSURL *dir = [NSFileManager.defaultManager URLsForDirectory:NSDownloadsDirectory inDomains:NSUserDomainMask].firstObject;
-	h([dir URLByAppendingPathComponent:name.lastPathComponent]);
+	NSString *n = name.lastPathComponent;
+	if (n.length == 0 || [n hasPrefix:@"."]) n = @"download"; // never "..", or hidden
+	h([dir URLByAppendingPathComponent:n]);
+}
+
+// Certificates are checked without going online: macOS would otherwise
+// fetch revocation data or missing certificates itself, outside the VPN
+// (as the app's own connections never do; a server that doesn't send its
+// full chain fails, as it does for the app).
+- (void)webView:(WKWebView *)v didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)ch completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))h {
+	if (![ch.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
+		h(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+		return;
+	}
+	SecTrustRef trust = ch.protectionSpace.serverTrust;
+	if (!trust || SecTrustSetNetworkFetchAllowed(trust, false) != errSecSuccess || !SecTrustEvaluateWithError(trust, NULL)) {
+		h(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+		return;
+	}
+	h(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:trust]);
 }
 
 // A pop-up the page asked for: reported, and nothing opens. The page gets a
@@ -99,7 +125,30 @@ static SBDenyAll *denyAll;
 @end
 static SBBrowserDelegate *delegate;
 
-// 0: open; 1: macOS is older than 14; 2: not on the main thread.
+// What the window never loads: anything on this computer or the local
+// network (the proxy would send it into the VPN, where it can't be reached,
+// but WebKit may not send it to the proxy at all), and audio or video,
+// which macOS can load in its media services, outside the proxy.
+static NSString *const blockRules = @"["
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://[^/]*\\\\.localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://127\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://0\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://10\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://192\\\\.168\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://169\\\\.254\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://172\\\\.(1[6-9])\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://172\\\\.(2[0-9])\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://172\\\\.(3[01])\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://\\\\[\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\".*\",\"resource-type\":[\"media\"]},\"action\":{\"type\":\"block\"}}"
+	"]";
+
+// WebRTC gone from every page and frame, besides its switch being off.
+static NSString *const noRTCScript = @"for (const n of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCSessionDescription', 'RTCIceCandidate']) { try { delete window[n]; } catch (e) {} }";
+
+// 0: open; 1: macOS is older than 14; 2: not on the main thread;
+// 3: WebRTC couldn't be turned off; 4: the block rules didn't compile.
 int sbw_open_window(const char *proxy, const char *user, const char *pass, const char *store, const char *title) {
 	if (!pthread_main_np()) return 2;
 	if (@available(macOS 14.0, *)) {
@@ -138,11 +187,31 @@ int sbw_open_window(const char *proxy, const char *user, const char *pass, const
 		// Pop-ups reach createWebView (which never opens one): refused
 		// outright, an ad script keeps retrying on every click.
 		c.preferences.javaScriptCanOpenWindowsAutomatically = YES;
+		// No Safe Browsing: its lookups are made by a system service of
+		// macOS's, outside the proxy.
+		c.preferences.fraudulentWebsiteWarningEnabled = NO;
 		// No WebRTC: its connections (STUN, peer to peer) don't go through
-		// the proxy. WebKit has no public switch; this one is its own.
+		// the proxy. WebKit has no public switch; this one is its own, and
+		// without it the window doesn't open.
 		SEL noRTC = NSSelectorFromString(@"_setPeerConnectionEnabled:");
-		if ([c.preferences respondsToSelector:noRTC])
-			((void (*)(id, SEL, BOOL))objc_msgSend)(c.preferences, noRTC, NO);
+		if (![c.preferences respondsToSelector:noRTC]) return 3;
+		((void (*)(id, SEL, BOOL))objc_msgSend)(c.preferences, noRTC, NO);
+		[c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:noRTCScript
+			injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+		// The block rules, compiled before anything loads (the answer comes
+		// on this thread, so it's waited for here).
+		__block WKContentRuleList *rules = nil;
+		__block BOOL compiled = NO;
+		[WKContentRuleListStore.defaultStore compileContentRuleListForIdentifier:@"sharkbite-browser-window"
+			encodedContentRuleList:blockRules completionHandler:^(WKContentRuleList *l, NSError *e) {
+				rules = l;
+				compiled = YES;
+			}];
+		NSDate *until = [NSDate dateWithTimeIntervalSinceNow:10];
+		while (!compiled && [until timeIntervalSinceNow] > 0)
+			[NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+		if (!rules) return 4;
+		[c.userContentController addContentRuleList:rules];
 
 		NSRect frame = NSMakeRect(0, 0, 1100, 760);
 		view = [[WKWebView alloc] initWithFrame:frame configuration:c];

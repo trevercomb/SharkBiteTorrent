@@ -25,6 +25,7 @@ import (
 	"sharkbite/internal/engine"
 	"sharkbite/internal/paste"
 	"sharkbite/internal/platform"
+	"sharkbite/internal/scan"
 	"sharkbite/internal/tunnel"
 )
 
@@ -59,6 +60,9 @@ func (a *App) startDownloads() {
 		Limiter:     d.limiter,
 		Connections: 4,
 		UserAgent:   paste.UserAgent,
+		// Marked from the internet the moment it's whole, not when its scan
+		// comes up (another file's scan can take a while).
+		Finishing: scan.MarkDownloaded,
 		OnChange: func() {
 			select {
 			case d.save <- struct{}{}:
@@ -207,7 +211,7 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, errors.New(paste.WithoutFragments(err.Error())) // Go's errors quote the address, key and all
 	}
 	if len(links) == 0 {
 		return nil, errors.New("no links found in that")
@@ -389,6 +393,13 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 			}
 			return
 		}
+	}
+	// A page's download is on the internet: never this computer or the home
+	// network (with No VPN, the app could otherwise be made to fetch from
+	// them), and only over the web.
+	if u, err := url.Parse(link); err != nil || (u.Scheme != "http" && u.Scheme != "https") || localHost(u.Hostname()) {
+		a.notifyError(fmt.Errorf("%s: its download link isn't on the internet, so it wasn't downloaded", paste.WithoutFragments(page.URL)))
+		return
 	}
 	name := ""
 	if _, params, err := mime.ParseMediaType(disposition); err == nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"sharkbite/internal/browser"
+	"sharkbite/internal/paste"
 	"sharkbite/internal/socks"
 )
 
@@ -257,7 +258,7 @@ func (a *App) waitForHuman(h *hostBrowser, p hostPage, status string) error {
 	if still, err = wait(time.Now().Add(humanCheckWait)); err != nil {
 		return err
 	} else if still {
-		return fmt.Errorf("%s: the human check wasn't done in time", p.URL)
+		return fmt.Errorf("%s: the human check wasn't done in time", paste.WithoutFragments(p.URL))
 	}
 	h.win.SetTitle(status)
 	return nil
@@ -279,7 +280,7 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 	select {
 	case <-h.loaded:
 	case <-time.After(pageLoadWait):
-		return fmt.Errorf("%s didn't load", p.URL)
+		return fmt.Errorf("%s didn't load", paste.WithoutFragments(p.URL))
 	case <-h.win.Done():
 		return errWindowClosed
 	}
@@ -318,7 +319,7 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 		a.addFromHost(p, d.link, d.disposition)
 		return nil
 	case <-time.After(userClickWait):
-		return fmt.Errorf("%s: no download started", p.URL)
+		return fmt.Errorf("%s: no download started", paste.WithoutFragments(p.URL))
 	case <-h.win.Done():
 		return errWindowClosed
 	}

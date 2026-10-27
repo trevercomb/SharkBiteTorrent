@@ -1023,7 +1023,7 @@ func checkBrowserArgs(s *pidSet) string {
 		}
 		needs := []string{"--proxy-server=127.0.0.1:9", "--host-resolver-rules="}
 		if hostWindow {
-			needs = []string{"--host-resolver-rules=", "MAP * ~NOTFOUND", "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"}
+			needs = []string{"--host-resolver-rules=", "MAP * ~NOTFOUND", "--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--proxy-bypass-list=<-loopback>"}
 			if strings.Count(cmd, "--proxy-server=") != 1 {
 				return "the file-host window's WebView2 (PID " + strconv.Itoa(pid) + ") has more than one --proxy-server (the last one wins)"
 			}

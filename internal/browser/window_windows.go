@@ -179,6 +179,10 @@ func (w *Window) run(ready chan<- error) {
 		`--host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE 127.0.0.1"`,
 		"--disable-quic", // UDP doesn't go through a SOCKS proxy
 		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+		// Chromium never sends this computer's addresses to a proxy unless
+		// told to: a page could reach programs on it (Prowlarr, say).
+		// Through the proxy, they go into the VPN, where they can't be reached.
+		"--proxy-bypass-list=<-loopback>",
 	}, w.o.Args...)
 	c.SetErrorCallback(func(err error) {
 		if Debug != nil {
@@ -210,7 +214,7 @@ func (w *Window) run(ready chan<- error) {
 			return w.o.OnDownload(d)
 		}
 		return DownloadChoice{Cancel: true}
-	}) {
+	}) || !WebOnly(c) || !DenyPermissions(c) {
 		pDestroyWindow.Call(hwnd)
 		ready <- errors.New("this WebView2 version is too old for the browser window: update Microsoft Edge WebView2")
 		return

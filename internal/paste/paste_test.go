@@ -264,3 +264,11 @@ func TestFindHTTPError(t *testing.T) {
 		t.Errorf("PageLink: %+v %v", l, ok)
 	}
 }
+
+func TestWithoutFragments(t *testing.T) {
+	in := `Get "https://bin.example/?abc#KeyKeyKey": EOF; see https://x.example/a#b and http://y.example/`
+	want := `Get "https://bin.example/?abc": EOF; see https://x.example/a and http://y.example/`
+	if got := WithoutFragments(in); got != want {
+		t.Errorf("got %q", got)
+	}
+}

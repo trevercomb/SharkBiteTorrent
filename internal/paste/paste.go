@@ -48,6 +48,13 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("%s: HTTP %d", e.Host, e.Status) }
 
+var urlFragment = regexp.MustCompile(`(\bhttps?://[^\s"'#]*)#[^\s"']*`)
+
+// WithoutFragments drops the "#…" part of the addresses in s, for text the
+// user sees (an error, say): a paste's key is there, and it's never shown or
+// sent anywhere.
+func WithoutFragments(s string) string { return urlFragment.ReplaceAllString(s, "$1") }
+
 // PageLink is input, an http(s) address, as a page (for the browser window).
 func PageLink(input string) (Link, bool) {
 	input = strings.TrimSpace(input)

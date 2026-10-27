@@ -3,14 +3,16 @@
 package browser
 
 import (
-	"sharkbite/internal/socks"
-
 	"encoding/binary"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"sharkbite/internal/socks"
 )
 
 // The browser window's proxy has no password (Chromium can't send one), so
@@ -84,7 +86,13 @@ func connOwner(from, to uint16) (uint32, bool) {
 
 func swap16(v uint32) uint16 { return uint16(v>>8&0xff | v<<8&0xff00) }
 
-// descendsFromUs walks up pid's parents looking for this process.
+// descendsFromUs walks up pid's parents looking for this process. Windows
+// keeps a process's parent ID after the parent exits and reuses IDs, so an
+// ID alone could lead to us by chance: every parent must have started
+// before its child, and after this process (a parent that started later is
+// a stranger that got a dead one's ID). The connecting program must be
+// WebView2's or the app's own, and other users' processes can't be opened,
+// so they never pass.
 func descendsFromUs(pid uint32) bool {
 	me := uint32(os.Getpid())
 	if pid == me {
@@ -96,10 +104,24 @@ func descendsFromUs(pid uint32) bool {
 	}
 	defer windows.CloseHandle(snap)
 	parent := map[uint32]uint32{}
+	image := map[uint32]string{}
 	var e windows.ProcessEntry32
 	e.Size = uint32(unsafe.Sizeof(e))
 	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
 		parent[e.ProcessID] = e.ParentProcessID
+		image[e.ProcessID] = strings.ToLower(windows.UTF16ToString(e.ExeFile[:]))
+	}
+	exe, _ := os.Executable()
+	if img := image[pid]; img != "msedgewebview2.exe" && img != strings.ToLower(filepath.Base(exe)) {
+		return false
+	}
+	myStart, ok := startTime(me)
+	if !ok {
+		return false
+	}
+	childStart, ok := startTime(pid)
+	if !ok || childStart < myStart {
+		return false
 	}
 	for range 8 { // WebView2's processes are a few levels down at most
 		p, ok := parent[pid]
@@ -109,7 +131,26 @@ func descendsFromUs(pid uint32) bool {
 		if p == me {
 			return true
 		}
-		pid = p
+		ps, ok := startTime(p)
+		if !ok || ps > childStart || ps < myStart {
+			return false
+		}
+		pid, childStart = p, ps
 	}
 	return false
+}
+
+// startTime is when pid started (false if it can't be opened: gone, or
+// another user's).
+func startTime(pid uint32) (int64, bool) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return 0, false
+	}
+	defer windows.CloseHandle(h)
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil {
+		return 0, false
+	}
+	return created.Nanoseconds(), true
 }

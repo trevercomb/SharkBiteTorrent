@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"golang.org/x/time/rate"
 )
@@ -101,6 +102,10 @@ type Manager struct {
 	Connections int
 	// UserAgent sent with requests; some hosts refuse Go's default one.
 	UserAgent string
+	// Finishing, if set, is called with a finished file's path just before
+	// it takes its own name, so it's never there unmarked (the app marks it
+	// as downloaded from the internet).
+	Finishing func(path string)
 
 	mu   sync.Mutex
 	jobs map[string]*job
@@ -285,6 +290,9 @@ func (m *Manager) Remove(id string, deleteFile bool) error {
 	m.changed()
 	if !deleteFile || spec.Name == "" {
 		return nil
+	}
+	if !plainName(spec.Name) {
+		return fmt.Errorf("not deleting %q: not a plain file name", spec.Name)
 	}
 	p := partPath(spec)
 	if spec.Done {
@@ -480,6 +488,9 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 		if st, err := os.Stat(partPath(spec)); err != nil || st.Size() != spec.Size {
 			return errors.New("the downloaded file has the wrong size")
 		}
+	}
+	if m.Finishing != nil {
+		m.Finishing(partPath(spec))
 	}
 	final := freeName(spec.Dir, spec.Name)
 	if err := os.Rename(partPath(spec), filepath.Join(spec.Dir, final)); err != nil {
@@ -835,8 +846,16 @@ func SafeName(n string) string {
 		if r < 32 || strings.ContainsRune(`<>:"|?*`, r) {
 			return '_'
 		}
+		// Invisible format characters (right-to-left overrides and the
+		// like) could show "invoice\u202Efdp.exe" as "invoiceexe.pdf".
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
 		return r
 	}, n)
+	// No hidden files (".bashrc"), and no trailing dots or spaces (Windows
+	// drops them).
+	n = strings.TrimLeft(n, ". ")
 	n = strings.TrimRight(n, ". ")
 	if n == "" || n == "." || n == ".." {
 		return ""

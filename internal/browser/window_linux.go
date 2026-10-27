@@ -75,6 +75,21 @@ static gboolean on_decide_policy(WebKitWebView *v, WebKitPolicyDecision *dec, We
 		webkit_policy_decision_ignore(dec);
 		return TRUE;
 	}
+	if (t == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION) {
+		// Web pages only: no other app's links (magnet:, mailto:…), which
+		// would hand them to a program outside the VPN.
+		WebKitNavigationAction *a = webkit_navigation_policy_decision_get_navigation_action(WEBKIT_NAVIGATION_POLICY_DECISION(dec));
+		WebKitURIRequest *r = webkit_navigation_action_get_request(a);
+		const char *u = r ? webkit_uri_request_get_uri(r) : NULL;
+		char *scheme = u ? g_uri_parse_scheme(u) : NULL;
+		gboolean web = scheme && (!g_ascii_strcasecmp(scheme, "http") || !g_ascii_strcasecmp(scheme, "https") ||
+			!g_ascii_strcasecmp(scheme, "about") || !g_ascii_strcasecmp(scheme, "data") || !g_ascii_strcasecmp(scheme, "blob"));
+		g_free(scheme);
+		if (!web) {
+			webkit_policy_decision_ignore(dec);
+			return TRUE;
+		}
+	}
 	if (t == WEBKIT_POLICY_DECISION_TYPE_RESPONSE) {
 		WebKitResponsePolicyDecision *rd = WEBKIT_RESPONSE_POLICY_DECISION(dec);
 		WebKitURIResponse *resp = webkit_response_policy_decision_get_response(rd);
