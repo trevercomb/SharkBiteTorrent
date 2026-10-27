@@ -608,7 +608,7 @@
       {#if torrents.length === 0 && downloads.length === 0}
         <div class="empty">
           {#if connected}
-            No torrents yet. Paste a magnet link, open a .torrent file, or drop one on this window. To download every link in some text or a page, use Paste links.
+            Nothing here yet. Add a torrent: paste a magnet link, open a .torrent file, or drop one on this window. To download files from links, a web page or a paste, use Paste links.
           {:else}
             Waiting for the VPN. Nothing will download until the tunnel is up.
           {/if}
