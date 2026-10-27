@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/main.png" width="820" alt="Main window: VPN connected through Cloudflare WARP">
+  <img src="docs/screenshots/main.png" width="820" alt="Main window: VPN connected, direct downloads listed above the torrents">
 </p>
 
 ---
@@ -65,6 +65,10 @@ It works out of the box with **free Cloudflare WARP**, so there's protection fro
 - **File hosts that only work in a real browser** (on macOS, 14 or later): their pages open in a browser window of the app's own whose traffic, DNS included, goes through the VPN. The app clicks each page's download button, blocks every pop-up, and downloads the file itself (so it resumes). If a site asks you to prove you're human, you do that in the window and the app carries on; it never tries to get around such checks.
 - Multi-select (Ctrl/Shift+click) to pause, resume or remove several at once, and **Clear finished** to tidy the list (the files stay).
 
+<p align="center">
+  <img src="docs/screenshots/paste-links.png" width="820" alt="Paste links: the files found on a Linux mirror's release folder, ready to download">
+</p>
+
 **Desktop**
 - **Tray icon** with close-to-tray, Pause all / Resume all, and live speeds in the tooltip.
 - **Updates**: the app checks GitHub (through the VPN) when it starts and about once a day while it runs, and offers new versions. *Update now* downloads the update, checks it against the release's signed SHA-256 checksums, installs it and restarts the app: on Windows with the installer; on macOS by replacing the app (after checking it's this app, at that version, and that its built-in signature checks out; the signed checksums are what prove where it came from); with the Linux tarball by replacing the program. If you installed with pacman, or the app can't write to its own folder, *Download (verified)* downloads and checks the file instead and saves it for you to install. Releases are signed with a key kept off GitHub (`release.pub`, key ID `F59273E544BB8BA3`), so a hijacked GitHub account couldn't push an update that passes these checks. There's also *Check for updates* in Settings.
@@ -72,7 +76,7 @@ It works out of the box with **free Cloudflare WARP**, so there's protection fro
 - **Windows installer**: per-user, no admin. It registers magnet links and `.torrent` files and cleans up on uninstall.
 
 <p align="center">
-  <img src="docs/screenshots/settings-vpn.png" width="820" alt="Settings: VPN choices, provider sign-in and WireGuard import">
+  <img src="docs/screenshots/settings-vpn.png" width="820" alt="Settings: VPN choices, signed in to a VPN account with a port-forwarding location">
 </p>
 
 ## Install
