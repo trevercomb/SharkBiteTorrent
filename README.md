@@ -5,8 +5,8 @@
 <h1 align="center">Shark BiteTorrent</h1>
 
 <p align="center">
-  A lightweight BitTorrent client with a VPN built in. Only the torrent client goes through the VPN;<br>
-  the rest of your computer keeps its normal connection.
+  A torrent client and download manager in one, with a VPN built in. Torrents, file links and<br>
+  file-host downloads all go through the app's VPN; the rest of your computer keeps its normal connection.
 </p>
 
 <p align="center">
