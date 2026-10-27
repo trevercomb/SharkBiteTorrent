@@ -330,7 +330,8 @@ func (a *App) autoCheckUpdate(gap time.Duration) {
 	skipped := a.settings.SkippedVersion
 	a.mu.Unlock()
 	a.writeSettings()
-	if info.Available && info.Latest != skipped {
+	// The channel may have been switched while the check ran (up to 30 s).
+	if info.Available && info.Latest != skipped && a.checkChannel(info.Latest) == nil {
 		runtime.EventsEmit(a.ctx, "update-available", info)
 	}
 }

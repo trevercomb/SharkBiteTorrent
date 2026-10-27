@@ -61,6 +61,13 @@
   let checking = $state(false)
   let installing = $state(false)
   let updateResult = $state<main.UpdateInfo | null>(null)
+  // A result for the other channel no longer applies once the option changes.
+  let checkedChannel = ''
+  $effect(() => {
+    const ch = s?.updateChannel ?? ''
+    if (checkedChannel && ch !== checkedChannel) updateResult = null
+    checkedChannel = ch
+  })
   // Set when the VPN is down: the user is asked before anything uses the
   // normal connection.
   let askDirect = $state<'check' | 'install' | 'download' | null>(null)
