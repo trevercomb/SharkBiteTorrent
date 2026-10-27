@@ -3,11 +3,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -117,7 +119,7 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		wake:   make(chan struct{}, 1),
 		loaded: make(chan string, 8),
 		caught: make(chan caughtDownload, 8),
-		proxy:  &socks.Server{Dial: a.searchDial},
+		proxy:  &socks.Server{Dial: a.hostDial},
 	}
 	o := browser.Options{
 		Proxy:   ln.Addr().String(),
@@ -147,6 +149,33 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 	}
 	go a.driveHostBrowser(h)
 	return h, nil
+}
+
+// hostDial is the window's way out: through the VPN (or directly with "No
+// VPN"), but never to this computer or the home network, so a page can't
+// reach a router's settings or a service listening on localhost. Every
+// request goes through the proxy (checked on each OS, localhost included).
+// A name is checked again once resolved, for names that point at 127.0.0.1;
+// through the VPN, names resolve and connect inside the tunnel, where this
+// computer isn't reachable anyway.
+func (a *App) hostDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if localHost(host) {
+		return nil, fmt.Errorf("%s is on this computer or the home network", host)
+	}
+	if !a.directMode() {
+		return a.dialTunnel(ctx, network, addr)
+	}
+	d := net.Dialer{Resolver: &net.Resolver{}, Control: func(_, address string, _ syscall.RawConn) error {
+		if h, _, err := net.SplitHostPort(address); err != nil || localHost(h) {
+			return fmt.Errorf("%s is on this computer or the home network", address)
+		}
+		return nil
+	}}
+	return d.DialContext(ctx, network, addr)
 }
 
 func (a *App) closeHostPages() {
