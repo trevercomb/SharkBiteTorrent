@@ -29,11 +29,32 @@ static void on_load_changed(WebKitWebView *v, WebKitLoadEvent e, gpointer d) {
 	if (e == WEBKIT_LOAD_FINISHED) goLoaded((char *)orempty(webkit_web_view_get_uri(v)));
 }
 
-// A pop-up the page asked for: reported, and nothing opens.
+// The stand-in for a pop-up: never shown, every navigation in it refused
+// (nothing loads), thrown away after a while.
+static gboolean deny_all(WebKitWebView *v, WebKitPolicyDecision *dec, WebKitPolicyDecisionType t, gpointer d) {
+	webkit_policy_decision_ignore(dec);
+	return TRUE;
+}
+
+static gboolean drop_standin(gpointer w) {
+	gtk_widget_destroy(GTK_WIDGET(w));
+	g_object_unref(w);
+	return G_SOURCE_REMOVE;
+}
+
+// A pop-up the page asked for: reported, and nothing opens. The page gets a
+// hidden stand-in window rather than none, as WebView2's handled request
+// does on Windows: an ad script that hijacks the download button's first
+// clicks to open an ad lets the next click through once it believes its ad
+// opened; given nothing, it hijacked every click.
 static GtkWidget *on_create(WebKitWebView *v, WebKitNavigationAction *a, gpointer d) {
 	WebKitURIRequest *r = webkit_navigation_action_get_request(a);
 	goPopup((char *)orempty(r ? webkit_uri_request_get_uri(r) : NULL), webkit_navigation_action_is_user_gesture(a));
-	return NULL;
+	GtkWidget *standin = webkit_web_view_new_with_related_view(v);
+	g_object_ref_sink(standin);
+	g_signal_connect(standin, "decide-policy", G_CALLBACK(deny_all), NULL);
+	g_timeout_add_seconds(60, drop_standin, standin);
+	return standin;
 }
 
 static int report_download(WebKitURIResponse *resp) {
@@ -111,7 +132,10 @@ static int open_window(const char *proxy, const char *datadir, const char *title
 	G_GNUC_END_IGNORE_DEPRECATIONS
 	webkit_settings_set_enable_webrtc(s, FALSE);
 	webkit_settings_set_enable_media_stream(s, FALSE);
-	webkit_settings_set_javascript_can_open_windows_automatically(s, FALSE);
+	// Pop-ups reach on_create (which never opens one): refused outright, an
+	// ad script that hijacks the download button's click to open one keeps
+	// retrying on every click.
+	webkit_settings_set_javascript_can_open_windows_automatically(s, TRUE);
 	// No GPU rendering, as in the app's main window (Wails does the same):
 	// on Wayland, WebKitGTK's DMA-BUF renderer killed the window with
 	// "Error 71 (Protocol error)" on this PC (NVIDIA).

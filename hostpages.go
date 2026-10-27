@@ -50,7 +50,7 @@ type caughtDownload struct{ link, disposition string }
 
 const (
 	pageLoadWait   = 45 * time.Second
-	clickTries     = 15 // a "free download" step and a countdown can take a while
+	clickTries     = 25 // two steps, clicks taken by ads, and a countdown: one host took 14 tries
 	clickWait      = 3 * time.Second
 	userClickWait  = 3 * time.Minute
 	humanCheckWait = 10 * time.Minute

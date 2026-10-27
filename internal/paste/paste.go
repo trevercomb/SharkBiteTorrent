@@ -39,6 +39,25 @@ type Link struct {
 	Kind Kind   `json:"kind"`
 }
 
+// HTTPError is a page that answered with something other than 200: a file
+// host that shows its pages to browsers only answers 403 or 404 here.
+type HTTPError struct {
+	Host   string
+	Status int
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("%s: HTTP %d", e.Host, e.Status) }
+
+// PageLink is input, an http(s) address, as a page (for the browser window).
+func PageLink(input string) (Link, bool) {
+	input = strings.TrimSpace(input)
+	u, err := url.Parse(input)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return Link{}, false
+	}
+	return Link{URL: input, Host: strings.TrimPrefix(strings.ToLower(u.Hostname()), "www."), Kind: Page}, true
+}
+
 // Read returns the text behind input: a PrivateBin paste is decrypted, any
 // other http(s) address is fetched, and anything else is the text itself.
 // hc should go through the VPN.
@@ -95,7 +114,7 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL) (string, *url.U
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("%s: HTTP %d", u.Host, resp.StatusCode)
+		return "", nil, &HTTPError{Host: u.Host, Status: resp.StatusCode}
 	}
 	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if ct != "" && !strings.HasPrefix(ct, "text/") && ct != "application/xhtml+xml" && ct != "application/json" {

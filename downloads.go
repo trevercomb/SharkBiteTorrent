@@ -197,6 +197,15 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	links, err := paste.Find(ctx, hc, input)
+	var he *paste.HTTPError
+	if errors.As(err, &he) && he.Status >= 400 {
+		// Many file hosts show their pages to browsers only (the app's own
+		// request gets a 403 or 404): the pasted page itself goes to the
+		// browser window, which gets its download.
+		if l, ok := paste.PageLink(input); ok {
+			return []paste.Link{l}, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

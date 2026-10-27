@@ -224,3 +224,18 @@ func TestReadText(t *testing.T) {
 		t.Errorf("file behind a plain address: got %q, %v", got, err)
 	}
 }
+
+// A page that answers 404 (file hosts that show pages to browsers only) is
+// reported as an HTTPError, so the app can open it in its browser window.
+func TestFindHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) }))
+	defer srv.Close()
+	_, err := Find(t.Context(), srv.Client(), srv.URL+"/abc123")
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Status != 404 {
+		t.Fatalf("err %v, want an HTTPError 404", err)
+	}
+	if l, ok := PageLink(srv.URL + "/abc123"); !ok || l.Kind != Page || l.Host != "127.0.0.1" {
+		t.Errorf("PageLink: %+v %v", l, ok)
+	}
+}
