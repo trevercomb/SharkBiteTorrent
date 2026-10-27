@@ -1,10 +1,10 @@
-//go:build !windows
+//go:build !windows && !(linux && cgo)
 
 package main
 
 import "errors"
 
-// The file-host browser window is Windows-only so far (hostpages_windows.go).
+// The file-host browser window needs Windows or Linux with WebKitGTK (hostpages.go).
 
 type hostPage struct {
 	URL    string
@@ -16,7 +16,7 @@ type hostPage struct {
 type hostBrowser struct{}
 
 func (a *App) openHostPages([]hostPage) error {
-	return errors.New("links to file hosts' pages need the browser window, which is only on Windows so far; direct file links and torrents work")
+	return errors.New("links to file hosts' pages need the browser window, which isn't available on this system; direct file links and torrents work")
 }
 
 func (a *App) closeHostPages() {}

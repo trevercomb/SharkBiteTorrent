@@ -156,12 +156,6 @@ func webviewOf(c *edge.Chromium) unsafe.Pointer {
 	return unsafe.Pointer(wv)
 }
 
-// NewWindow describes a pop-up the page tried to open.
-type NewWindow struct {
-	URL         string
-	UserStarted bool // from a click, rather than a script on its own
-}
-
 // OnNewWindow blocks every new window the page opens and reports it.
 func OnNewWindow(c *edge.Chromium, fn func(NewWindow)) bool {
 	wv := webviewOf(c)
@@ -179,20 +173,6 @@ func OnNewWindow(c *edge.Chromium, fn func(NewWindow)) bool {
 	})
 	var token int64
 	return !failed(call(wv, slotAddNewWindowRequested, uintptr(unsafe.Pointer(h)), uintptr(unsafe.Pointer(&token))))
-}
-
-// Download describes a download the page started.
-type Download struct {
-	URL         string
-	Disposition string // Content-Disposition, which usually holds the file name
-	MimeType    string
-	Size        int64 // -1 if unknown
-}
-
-// DownloadChoice is what to do with a download that's starting.
-type DownloadChoice struct {
-	Cancel bool   // the app downloads it itself
-	Path   string // otherwise, where the browser saves it ("" = its default)
 }
 
 // OnDownload reports each download the page starts; the browser's own

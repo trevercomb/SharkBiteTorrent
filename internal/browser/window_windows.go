@@ -14,24 +14,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Options for a browser window.
-type Options struct {
-	// Proxy is the 127.0.0.1:port of a SOCKS5 proxy without a password
-	// (Chromium can't log in to one) that sends everything through the VPN.
-	Proxy string
-	// DataDir holds the window's own browser profile (cookies, cache).
-	DataDir string
-	Title   string
-	// Args are extra Chromium switches (e.g. features to turn off).
-	Args []string
-
-	// Called on the window's thread.
-	OnDownload func(Download) DownloadChoice
-	OnLoaded   func(url string)
-	OnPopup    func(NewWindow)
-	OnClosed   func() // the window is gone (closed by the user or Close)
-}
-
 // Window is a top-level window with a WebView2 inside. One at a time.
 type Window struct {
 	o        Options
