@@ -13,6 +13,12 @@
   let picked = $state(new Set<string>())
   let busy = $state(false)
   let error = $state('')
+  // A site that's slow to answer (some ignore VPN addresses) gets named
+  // after a few seconds, so the dialog doesn't look stuck.
+  let waitingFor = $state('')
+  function hostOf(text: string): string {
+    try { return new URL(text.trim()).hostname } catch { return '' }
+  }
 
   const kindLabel: Record<string, string> = {
     magnet: 'Torrent', torrent: 'Torrent', file: 'File', page: 'Page',
@@ -48,6 +54,8 @@
     if (!input.trim()) return
     busy = true
     error = ''
+    const host = hostOf(input)
+    const slow = host ? setTimeout(() => (waitingFor = host), 5000) : undefined
     try {
       const found = await ReadPaste(input)
       links = found
@@ -59,6 +67,8 @@
     } catch (e) {
       error = String(e)
     }
+    clearTimeout(slow)
+    waitingFor = ''
     busy = false
   }
 
@@ -110,6 +120,9 @@
       <div class="row">
         <button class="primary" type="submit" disabled={busy || !input.trim()}>{busy && !links ? 'Reading…' : 'Find links'}</button>
       </div>
+      {#if waitingFor}
+        <p class="muted small">Still waiting for {waitingFor} to answer. Some sites ignore VPN addresses; this gives up after a minute.</p>
+      {/if}
     </form>
 
     {#if links}
