@@ -188,7 +188,7 @@
     const diff = (...keys: (keyof main.Settings)[]) => keys.some(k => String(s![k]) !== String(original![k]))
     return {
       vpn: vpnChanged,
-      downloads: diff('downloadDir', 'askSaveLocation', 'downLimitKB', 'upLimitKB', 'seedRatio', 'seedHours', 'seedAction', 'scanDownloads', 'autoVerify'),
+      downloads: diff('downloadDir', 'askSaveLocation', 'downLimitKB', 'upLimitKB', 'seedRatio', 'seedHours', 'seedAction', 'notifyFinished', 'scanDownloads', 'autoVerify'),
       app: diff('closeToTray', 'autoUpdateCheck', 'updateChannel') || (!!startup && !startup.viaWindowsSettings && startupOn !== startup.enabled),
     }
   })
@@ -257,6 +257,15 @@
               <input type="number" min="0" bind:value={s.upLimitKB} class="short" /> <span class="muted">KB/s</span>
             </label>
             <p class="muted small">0 = unlimited. Changes apply immediately.</p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Notifications</legend>
+            <label class="check">
+              <input type="checkbox" bind:checked={s.notifyFinished} />
+              <span>Notify me when a download finishes</span>
+            </label>
+            <p class="muted small">Once its malware scan is done, with what the scan found.</p>
           </fieldset>
 
           <fieldset>

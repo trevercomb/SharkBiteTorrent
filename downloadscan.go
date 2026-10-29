@@ -113,6 +113,7 @@ func (a *App) checkDownload(ctx context.Context, m *ddl.Manager, s ddl.Spec) {
 	data, _ := json.Marshal(meta)
 	m.SetMeta(s.ID, data)
 	a.warnThreats(s.Name, rec)
+	a.announceFinished(s.Name, rec)
 }
 
 // downloadStatus adds a download's scan result for the UI.

@@ -604,6 +604,7 @@ export namespace main {
 	    lastUpdateCheck: number;
 	    updateChannel: string;
 	    scanDownloads: boolean;
+	    notifyFinished: boolean;
 	    autoVerify: string;
 	    askSaveLocation: boolean;
 	    recentDirs?: string[];
@@ -633,6 +634,7 @@ export namespace main {
 	        this.lastUpdateCheck = source["lastUpdateCheck"];
 	        this.updateChannel = source["updateChannel"];
 	        this.scanDownloads = source["scanDownloads"];
+	        this.notifyFinished = source["notifyFinished"];
 	        this.autoVerify = source["autoVerify"];
 	        this.askSaveLocation = source["askSaveLocation"];
 	        this.recentDirs = source["recentDirs"];

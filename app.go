@@ -141,6 +141,9 @@ type Settings struct {
 	UpdateChannel string `json:"updateChannel"`
 	// ScanDownloads scans finished torrents with the system antivirus.
 	ScanDownloads bool `json:"scanDownloads"`
+	// NotifyFinished: a system notification when a download finishes (and
+	// its checks are done; notify.go).
+	NotifyFinished bool `json:"notifyFinished"`
 	// AutoVerify: re-check a finished torrent's files against its piece
 	// hashes before the malware scan. "suspect" (default): only if something
 	// during the download could have damaged them; "all": every download;
@@ -1690,6 +1693,7 @@ func (a *App) loadSettings() {
 		AutoUpdateCheck: true,
 		UpdateChannel:   channelStable,
 		ScanDownloads:   true,
+		NotifyFinished:  true,
 		AutoVerify:      "suspect",
 		SeedAction:      "pause",
 		// On for everyone, including settings saved by older versions (no
