@@ -134,6 +134,11 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL) (string, *url.U
 	if err != nil {
 		return "", nil, err
 	}
+	if ct == "" { // no type given: look at it, as a browser would
+		if ct, _, _ = mime.ParseMediaType(http.DetectContentType(b)); !strings.HasPrefix(ct, "text/") {
+			return "", nil, errNotPage
+		}
+	}
 	// Plain text (not a web page) without a link in it is a file of its
 	// own, such as a .txt or .nfo; with links it's a list of them.
 	if ct != "" && ct != "text/html" && ct != "application/xhtml+xml" &&
