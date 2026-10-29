@@ -40,7 +40,7 @@ Check the draft's release notes before publishing.
 A beta (`vX.Y.Z-beta.N`, the version of the next release) ships what's committed on `main` to people on the **Beta** update channel, without waiting for a release. It's tagged, built and signed exactly like a release, with lighter checks:
 
 1. Checks and CodeQL green on the commit; the **Unreleased** section of `CHANGELOG.md` says what's new (it becomes the beta's notes, so don't rename it).
-2. The engine leak test if networking, the VPN or the updater changed; an audit (the Audit workflow is enough) if the beta touches anything in step 4's list.
+2. The engine leak test if networking, the VPN or the updater changed. No audit: betas aren't audited; the audit (step 4) comes before the stable release and covers everything since the last one.
 3. Tag and publish as in Shipping, without bumping any version (the workflow takes it from the tag):
    ```sh
    git tag -a vX.Y.Z-beta.N -m "Shark BiteTorrent X.Y.Z beta N" && git push origin vX.Y.Z-beta.N
