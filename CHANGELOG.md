@@ -10,6 +10,9 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 - **File hosts that only work in a real browser** open in a browser window of the app's own whose traffic goes through the VPN (on Linux it uses WebKitGTK and on macOS WebKit, the engines already behind the app's window; macOS 14 or later). It clicks each page's download button, blocks pop-ups and hands the download to the app. If a site asks you to prove you're human, the window says so and you do it there; the app never tries to get around such checks. If a download link expires, **Get a new link** opens the page again and the download carries on where it was.
 - **Ask where to save each download** (Settings → Downloads, on by default): before anything is added, choose its folder (the default, one of the last five you used, or another) and whether to start it now or add it paused. *Don't ask again* turns it off. Links opened from outside the app get the folder choice in their banner.
 
+### Fixed
+- **Speed limits** changed while the app was running had no effect until it was restarted: a download could go at full speed with a limit of 300 KB/s. They now apply at once.
+
 ## [0.2.41] - 2026-10-27
 
 ### Added
