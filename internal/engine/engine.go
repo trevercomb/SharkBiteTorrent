@@ -353,8 +353,26 @@ func (e *Engine) Close() {
 
 // SetLimits changes the global speed limits (bytes/s, 0 = unlimited) live.
 func (e *Engine) SetLimits(down, up int64) {
-	e.down.SetLimit(limitOf(down))
-	e.up.SetLimit(limitOf(up))
+	setLimit(e.down, down)
+	setLimit(e.up, up)
+}
+
+// minBurst: the library reads up to 1 MiB at a time through the download
+// limiter (rate.go), so its burst can't be smaller.
+const minBurst = 1 << 20
+
+// setLimit sets a limiter's rate and its burst together: one second's worth,
+// at least minBurst. The burst matters as much as the rate: a limiter made
+// "unlimited" got a burst of 1 TiB from the library (it sizes a zero burst
+// from the rate), so a limit set later, while the app ran, never held
+// (seen: 12.5 MB/s at a 300 KB/s limit); only one set before starting did.
+func setLimit(l *rate.Limiter, n int64) {
+	burst := minBurst
+	if n > minBurst {
+		burst = int(min(n, 1<<30))
+	}
+	l.SetLimit(limitOf(n))
+	l.SetBurst(burst)
 }
 
 // unlimited is used instead of rate.Inf: anacrolix stops opening peer
