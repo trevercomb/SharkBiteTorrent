@@ -43,6 +43,82 @@
   const selDls = $derived(downloads.filter(d => selectedDls.has(d.id)))
   const finishedDls = $derived(downloads.filter(d => d.state === 'done'))
   const totalDown = $derived(torrents.reduce((s, t) => s + t.downRate, 0) + downloads.reduce((s, d) => s + d.rate, 0))
+
+  // Narrowing and sorting the list (torrents and downloads alike).
+  type Group = 'all' | 'active' | 'done' | 'paused' | 'problems'
+  let group = $state<Group>('all')
+  let filter = $state('')
+  let filterBox = $state<HTMLInputElement | null>(null)
+  const groups: { id: Group; label: string }[] = [
+    { id: 'all', label: 'All' }, { id: 'active', label: 'Active' }, { id: 'done', label: 'Done' },
+    { id: 'paused', label: 'Paused' }, { id: 'problems', label: 'Problems' },
+  ]
+  function torrentGroup(t: engine.Status): Group {
+    if (t.state === 'blocked' || t.state === 'needs-torrent-file' || t.scanState === 'threat') return 'problems'
+    if (t.state === 'paused') return 'paused'
+    if (t.state === 'seeding') return 'done'
+    return 'active'
+  }
+  function downloadGroup(d: main.DownloadStatus): Group {
+    if (d.state === 'failed' || d.state === 'needsLink' || d.scan === 'threat' || d.scan === 'gone') return 'problems'
+    if (d.state === 'paused') return 'paused'
+    if (d.state === 'done') return 'done'
+    return 'active'
+  }
+  const nameMatches = (name: string) => {
+    const words = filter.toLowerCase().split(/\s+/).filter(Boolean)
+    const n = name.toLowerCase()
+    return words.every(w => n.includes(w))
+  }
+  const inGroup = (g: Group) => group === 'all' || g === group
+  const groupCount = $derived.by(() => {
+    const c: Record<Group, number> = { all: 0, active: 0, done: 0, paused: 0, problems: 0 }
+    for (const t of torrents) c[torrentGroup(t)]++
+    for (const d of downloads) c[downloadGroup(d)]++
+    c.all = torrents.length + downloads.length
+    return c
+  })
+
+  // Sorting: a column heading cycles ascending → descending → as added.
+  type SortKey = 'name' | 'size' | 'progress' | 'status' | 'down' | 'up' | 'eta' | 'peers'
+  function savedSort(): { key: SortKey | null; desc: boolean } {
+    try {
+      const s = JSON.parse(localStorage.getItem('listSort') ?? 'null')
+      if (s?.key) return { key: s.key, desc: !!s.desc }
+    } catch {} // no storage: sorting just isn't remembered
+    return { key: null, desc: false }
+  }
+  const initialSort = savedSort()
+  let sortKey = $state<SortKey | null>(initialSort.key)
+  let sortDesc = $state(initialSort.desc)
+  function sortBy(k: SortKey) {
+    if (sortKey !== k) [sortKey, sortDesc] = [k, false]
+    else if (!sortDesc) sortDesc = true
+    else sortKey = null
+    try { localStorage.setItem('listSort', JSON.stringify({ key: sortKey, desc: sortDesc })) } catch {}
+  }
+  const sortMark = (k: SortKey) => (sortKey === k ? (sortDesc ? ' ▾' : ' ▴') : '')
+  const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+  function sorted<T>(list: T[], value: (x: T, k: SortKey) => string | number): T[] {
+    if (!sortKey) return list
+    const k = sortKey
+    const out = [...list].sort((a, b) => {
+      const va = value(a, k), vb = value(b, k)
+      return typeof va === 'string' ? natural.compare(va, vb as string) : (va as number) - (vb as number)
+    })
+    return sortDesc ? out.reverse() : out
+  }
+  const etaSeconds = (left: number, rate: number) => (rate > 0 ? left / rate : Infinity)
+  const torrentValue = (t: engine.Status, k: SortKey): string | number =>
+    ({ name: t.name || t.hash, size: t.size, progress: t.progress, status: statusText(t), down: t.downRate, up: t.upRate,
+      eta: t.state === 'downloading' ? etaSeconds(t.size - t.done, t.downRate) : Infinity, peers: t.peers })[k]
+  const downloadValue = (d: main.DownloadStatus, k: SortKey): string | number =>
+    ({ name: d.name, size: d.size, progress: dlProgress(d), status: dlStatus(d), down: d.rate, up: 0,
+      eta: d.state === 'running' && d.size > 0 ? etaSeconds(d.size - d.have, d.rate) : Infinity, peers: 0 })[k]
+
+  const shownTorrents = $derived(sorted(torrents.filter(t => inGroup(torrentGroup(t)) && nameMatches(t.name || t.hash)), torrentValue))
+  const shownDownloads = $derived(sorted(downloads.filter(d => inGroup(downloadGroup(d)) && nameMatches(d.name)), downloadValue))
+  const narrowed = $derived(group !== 'all' || filter.trim() !== '')
   const totalUp = $derived(torrents.reduce((s, t) => s + t.upRate, 0))
 
   async function refresh() {
@@ -242,12 +318,19 @@
       menu = null
       dlMenu = null
     }
+    // Ctrl+F: the list's filter box (not in dialogs, or while searching).
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && filterBox && !showPaste && !showSettings && !searching) {
+      e.preventDefault()
+      filterBox.focus()
+      filterBox.select()
+      return
+    }
     // Keys for the downloads list, unless typing somewhere or a dialog is open.
     const typing = (e.target as HTMLElement)?.closest?.('input, textarea, select')
     if (typing || showPaste || showSettings || removing || removingDls || selDls.length === 0) return
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault()
-      selectedDls = new Set(downloads.map(d => d.id))
+      selectedDls = new Set(shownDownloads.map(d => d.id)) // what the filter shows
     } else if (e.key === 'Delete') {
       askRemoveDownloads(selDls)
     }
@@ -571,17 +654,42 @@
     </main>
   {:else}
   <main class:split={!!sel}>
+    {#if torrents.length + downloads.length > 0}
+        <div class="listbar">
+          <input class="filter" type="search" bind:this={filterBox} bind:value={filter} placeholder="Filter by name (Ctrl+F)" aria-label="Filter by name" />
+          <div class="groups" role="group" aria-label="Show">
+            {#each groups as g (g.id)}
+              {#if g.id === 'all' || groupCount[g.id] > 0 || group === g.id}
+                <button class:active={group === g.id} class:problems={g.id === 'problems' && groupCount.problems > 0}
+                  onclick={() => (group = g.id)} aria-pressed={group === g.id}>
+                  {g.label} <span class="count">{groupCount[g.id]}</span>
+                </button>
+              {/if}
+            {/each}
+          </div>
+        </div>
+    {/if}
     <div class="list">
-      {#if downloads.length > 0}
+      {#if narrowed && shownTorrents.length + shownDownloads.length === 0 && torrents.length + downloads.length > 0}
+        <div class="empty">
+          <div>Nothing matches{filter.trim() ? ` “${filter.trim()}”` : ''}{group !== 'all' ? ` in ${groups.find(g => g.id === group)?.label}` : ''}.
+            <button class="inline" onclick={() => { filter = ''; group = 'all' }}>Show everything</button></div>
+        </div>
+      {/if}
+      {#if shownDownloads.length > 0}
         <table class="downloads">
           <thead>
             <tr>
-              <th class="name">Downloads</th><th>Size</th><th class="prog">Progress</th><th>Status</th>
-              <th>Down</th><th>ETA</th>
+              <th class="name sortable" onclick={() => sortBy('name')}>Downloads{sortMark('name')}</th>
+              <th class="sortable" onclick={() => sortBy('size')}>Size{sortMark('size')}</th>
+              <th class="prog sortable" onclick={() => sortBy('progress')}>Progress{sortMark('progress')}</th>
+              <th class="sortable" onclick={() => sortBy('status')}>Status{sortMark('status')}</th>
+              <th class="sortable" onclick={() => sortBy('down')}>Down{sortMark('down')}</th>
+              <th class="sortable" onclick={() => sortBy('eta')}>ETA{sortMark('eta')}</th>
             </tr>
           </thead>
           <tbody>
-            {#each downloads as d (d.id)}
+            {#each shownDownloads as d (d.id)}
               <tr class:selected={selectedDls.has(d.id)} onclick={e => selectDownload(d.id, e)} oncontextmenu={e => openDlMenu(e, d)}>
                 <td class="name" title={d.name}>
                   {#if d.scan === 'threat' || (d.scan === 'gone' && d.threats.length)}
@@ -613,16 +721,22 @@
             Waiting for the VPN. Nothing will download until the tunnel is up.
           {/if}
         </div>
-      {:else if torrents.length > 0}
+      {:else if shownTorrents.length > 0}
         <table>
           <thead>
             <tr>
-              <th class="name">Name</th><th>Size</th><th class="prog">Progress</th><th>Status</th>
-              <th>Down</th><th>Up</th><th>ETA</th><th>Seeds/Peers</th>
+              <th class="name sortable" onclick={() => sortBy('name')}>{downloads.length ? 'Torrents' : 'Name'}{sortMark('name')}</th>
+              <th class="sortable" onclick={() => sortBy('size')}>Size{sortMark('size')}</th>
+              <th class="prog sortable" onclick={() => sortBy('progress')}>Progress{sortMark('progress')}</th>
+              <th class="sortable" onclick={() => sortBy('status')}>Status{sortMark('status')}</th>
+              <th class="sortable" onclick={() => sortBy('down')}>Down{sortMark('down')}</th>
+              <th class="sortable" onclick={() => sortBy('up')}>Up{sortMark('up')}</th>
+              <th class="sortable" onclick={() => sortBy('eta')}>ETA{sortMark('eta')}</th>
+              <th class="sortable" onclick={() => sortBy('peers')}>Seeds/Peers{sortMark('peers')}</th>
             </tr>
           </thead>
           <tbody>
-            {#each torrents as t (t.hash)}
+            {#each shownTorrents as t (t.hash)}
               <tr
                 class:selected={t.hash === selected}
                 onclick={() => { selected = t.hash; selectedDls = new Set() }}
@@ -859,6 +973,15 @@
   main.split .list { flex: 1.4; }
   .details { flex: 1; min-height: 120px; border-top: 1px solid var(--border); }
   .empty { display: grid; place-items: center; height: 100%; color: var(--muted); padding: 0 16px; text-align: center; }
+  .listbar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .listbar .filter { width: 240px; max-width: 100%; padding: 3px 8px; }
+  .groups { display: flex; gap: 4px; flex-wrap: wrap; }
+  .groups button { padding: 2px 10px; border-radius: 12px; font-size: 12px; }
+  .groups button.active { border-color: var(--accent); color: var(--accent); }
+  .groups button.problems { color: var(--warn); }
+  .groups .count { color: var(--muted); margin-left: 2px; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text, inherit); }
 
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   th {
