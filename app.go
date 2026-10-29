@@ -96,6 +96,7 @@ type App struct {
 	sfvResults   map[string]*engine.SFVStatus  // .sfv results not yet in a saved scan record
 	verifyCtx    context.Context               // cancelled on disconnect; stops "Verify files"
 	dl           *downloads                    // direct downloads (downloads.go); guarded by mu
+	totalsSaved  time.Time                     // when seeding.go last wrote the totals; guarded by mu
 	dlScanStop   map[string]context.CancelFunc // stops a direct download's running malware scan (downloadscan.go); guarded by mu
 	hostMu       sync.Mutex                    // guards host
 	host         *hostBrowser                  // the file-host browser window, while open (hostpages_*.go)
@@ -124,7 +125,13 @@ type Settings struct {
 	AccountRegion   string `json:"accountRegion"`
 	DownLimitKB     int64  `json:"downLimitKB"` // 0 = unlimited
 	UpLimitKB       int64  `json:"upLimitKB"`
-	CloseToTray     bool   `json:"closeToTray"`
+	// Seeding limits (seeding.go): stop at this ratio and/or after this many
+	// hours of seeding (0 = no limit), then SeedAction: "pause" or "remove"
+	// (keeping the files).
+	SeedRatio   float64 `json:"seedRatio"`
+	SeedHours   float64 `json:"seedHours"`
+	SeedAction  string  `json:"seedAction"`
+	CloseToTray bool    `json:"closeToTray"`
 	// Update checks (see updater.go).
 	AutoUpdateCheck bool   `json:"autoUpdateCheck"`
 	SkippedVersion  string `json:"skippedVersion"`
@@ -134,6 +141,9 @@ type Settings struct {
 	UpdateChannel string `json:"updateChannel"`
 	// ScanDownloads scans finished torrents with the system antivirus.
 	ScanDownloads bool `json:"scanDownloads"`
+	// NotifyFinished: a system notification when a download finishes (and
+	// its checks are done; notify.go).
+	NotifyFinished bool `json:"notifyFinished"`
 	// AutoVerify: re-check a finished torrent's files against its piece
 	// hashes before the malware scan. "suspect" (default): only if something
 	// during the download could have damaged them; "all": every download;
@@ -159,7 +169,17 @@ type savedTorrent struct {
 	Source  string `json:"source"`
 	Dir     string `json:"dir"`
 	Skipped []int  `json:"skipped,omitempty"`
-	Paused  bool   `json:"paused"`
+	High    []int  `json:"high,omitempty"` // files to download first
+	// FirstLast: each wanted file's first and last piece first (previews).
+	FirstLast bool `json:"firstLast,omitempty"`
+	Paused    bool `json:"paused"`
+	// Totals across sessions (seeding.go): bytes sent and received, and time
+	// spent seeding. SeedLimitHit: it reached the seeding limit once, so it
+	// isn't stopped again if the user resumes it.
+	Uploaded     int64 `json:"uploaded,omitempty"`
+	Downloaded   int64 `json:"downloaded,omitempty"`
+	SeedMillis   int64 `json:"seedMillis,omitempty"`
+	SeedLimitHit bool  `json:"seedLimitHit,omitempty"`
 	// Confirm: added from outside the app (a browser, the file association),
 	// so it waits until the user starts it. It isn't given to the engine
 	// until then: nothing (trackers, DHT, peers) is contacted. Name and Size
@@ -725,7 +745,7 @@ func (a *App) startEngine(tun *tunnel.Tunnel, eng *engine.Engine, st VpnStatus) 
 			continue // waiting for the user: not given to the engine yet
 		}
 		// Adopt only what an older version saved: its files are its own.
-		_, err := eng.Add(engine.AddOptions{Source: s.Source, Dir: s.Dir, Skipped: s.Skipped, Paused: s.Paused, Adopt: s.legacy, AcceptWarnings: s.WarningsAccepted})
+		_, err := eng.Add(engine.AddOptions{Source: s.Source, Dir: s.Dir, Skipped: s.Skipped, High: s.High, FirstLast: s.FirstLast, Uploaded: s.Uploaded, Downloaded: s.Downloaded, Paused: s.Paused, Adopt: s.legacy, AcceptWarnings: s.WarningsAccepted})
 		if err != nil {
 			runtime.LogWarningf(a.ctx, "%s", engine.Redact(fmt.Sprintf("restore %s: %v", s.Hash, err)))
 		}
@@ -737,6 +757,7 @@ func (a *App) startEngine(tun *tunnel.Tunnel, eng *engine.Engine, st VpnStatus) 
 	}
 	go a.autoCheckUpdates(mctx)
 	go a.scanLoop(mctx)
+	go a.seedLoop(mctx)
 	return mctx
 }
 
@@ -822,6 +843,7 @@ func (a *App) disconnect() {
 		stop()
 	}
 	if eng != nil {
+		a.updateTotals(eng.List(), 0, true)
 		eng.Close()
 	}
 	if tun != nil {
@@ -956,6 +978,14 @@ func (a *App) ListTorrents() []engine.Status {
 		}
 	}
 	list = kept
+	for i := range list {
+		if s := a.savedFor(list[i].Hash); s != nil {
+			t := &list[i]
+			t.Ratio = ratioOf(max(t.Uploaded, s.Uploaded), max(t.Downloaded, s.Downloaded), t.Size)
+			t.SeedSeconds = s.SeedMillis / 1000
+			t.SeedLimit = s.SeedLimitHit && s.Paused
+		}
+	}
 	a.mu.Unlock()
 	// Torrents added from outside the app, waiting for the user.
 	a.mu.Lock()
@@ -1409,6 +1439,34 @@ func (a *App) SetFilesWanted(hash string, indexes []int, wanted bool) error {
 	return nil
 }
 
+// SetFilesHigh marks files to download before the others (or back to normal).
+func (a *App) SetFilesHigh(hash string, indexes []int, high bool) error {
+	eng, err := a.engine()
+	if err != nil {
+		return err
+	}
+	list, err := eng.SetFilesHigh(hash, indexes, high)
+	if err != nil {
+		return err
+	}
+	a.updateSaved(hash, func(s *savedTorrent) { s.High = list })
+	return nil
+}
+
+// SetFirstLast turns "first and last pieces first" on or off for a torrent:
+// each wanted file's start and end come first, so a video can be previewed.
+func (a *App) SetFirstLast(hash string, on bool) error {
+	eng, err := a.engine()
+	if err != nil {
+		return err
+	}
+	if err := eng.SetFirstLast(hash, on); err != nil {
+		return err
+	}
+	a.updateSaved(hash, func(s *savedTorrent) { s.FirstLast = on })
+	return nil
+}
+
 // OpenFolder opens a torrent's folder in Explorer, or the default download
 // folder if hash is empty.
 func (a *App) OpenFolder(hash string) error {
@@ -1496,6 +1554,12 @@ func (a *App) SaveSettings(s Settings) error {
 	}
 	if s.DownLimitKB < 0 || s.UpLimitKB < 0 {
 		return errors.New("speed limits can't be negative")
+	}
+	if s.SeedRatio < 0 || s.SeedHours < 0 {
+		return errors.New("seeding limits can't be negative")
+	}
+	if s.SeedAction != seedRemove {
+		s.SeedAction = "pause"
 	}
 	if s.VpnProvider == "custom" {
 		if _, err := os.Stat(a.customConfPath()); err != nil {
@@ -1629,7 +1693,9 @@ func (a *App) loadSettings() {
 		AutoUpdateCheck: true,
 		UpdateChannel:   channelStable,
 		ScanDownloads:   true,
+		NotifyFinished:  true,
 		AutoVerify:      "suspect",
+		SeedAction:      "pause",
 		// On for everyone, including settings saved by older versions (no
 		// such field there): the dialog's "Don't ask again" turns it off.
 		AskSaveLocation: true,

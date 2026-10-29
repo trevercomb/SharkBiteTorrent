@@ -158,6 +158,8 @@
         forwardedPort: Number(s!.forwardedPort) || 0,
         downLimitKB: Number(s!.downLimitKB) || 0,
         upLimitKB: Number(s!.upLimitKB) || 0,
+        seedRatio: Number(s!.seedRatio) || 0,
+        seedHours: Number(s!.seedHours) || 0,
       }))
       // After the settings saved, so a refused save doesn't half-apply.
       if (startup && !startup.viaWindowsSettings && startupOn !== startup.enabled) {
@@ -186,7 +188,7 @@
     const diff = (...keys: (keyof main.Settings)[]) => keys.some(k => String(s![k]) !== String(original![k]))
     return {
       vpn: vpnChanged,
-      downloads: diff('downloadDir', 'askSaveLocation', 'downLimitKB', 'upLimitKB', 'scanDownloads', 'autoVerify'),
+      downloads: diff('downloadDir', 'askSaveLocation', 'downLimitKB', 'upLimitKB', 'seedRatio', 'seedHours', 'seedAction', 'notifyFinished', 'scanDownloads', 'autoVerify'),
       app: diff('closeToTray', 'autoUpdateCheck', 'updateChannel') || (!!startup && !startup.viaWindowsSettings && startupOn !== startup.enabled),
     }
   })
@@ -255,6 +257,38 @@
               <input type="number" min="0" bind:value={s.upLimitKB} class="short" /> <span class="muted">KB/s</span>
             </label>
             <p class="muted small">0 = unlimited. Changes apply immediately.</p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Notifications</legend>
+            <label class="check">
+              <input type="checkbox" bind:checked={s.notifyFinished} />
+              <span>Notify me when a download finishes</span>
+            </label>
+            <p class="muted small">Once its malware scan is done, with what the scan found.</p>
+          </fieldset>
+
+          <fieldset>
+            <legend>Seeding limits</legend>
+            <label class="row">
+              <span class="lbl">Stop at ratio</span>
+              <input type="number" min="0" step="0.1" bind:value={s.seedRatio} class="short" />
+            </label>
+            <label class="row">
+              <span class="lbl">Or after</span>
+              <input type="number" min="0" step="any" bind:value={s.seedHours} class="short" /> <span class="muted">hours of seeding</span>
+            </label>
+            <label class="row">
+              <span class="lbl">Then</span>
+              <select bind:value={s.seedAction}>
+                <option value="pause">Pause it</option>
+                <option value="remove">Remove it from the list (keeps the files)</option>
+              </select>
+            </label>
+            <p class="muted small">
+              0 = no limit. Ratio is uploaded ÷ downloaded: 1 gives back as much as you took, 2 twice as much.
+              A torrent you resume after it stopped keeps seeding.
+            </p>
           </fieldset>
 
           <fieldset>

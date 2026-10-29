@@ -234,13 +234,20 @@ func TestReadText(t *testing.T) {
 			w.Header().Set("Content-Type", "text/html")
 			w.Header().Set("Content-Disposition", `attachment; filename="page.html"`)
 			w.Write([]byte(`<a href="https://x.example/a.zip">a</a>`))
+		case "/SHA256SUMS", "/blob": // no type at all (some mirrors)
+			w.Header()["Content-Type"] = nil
+			if r.URL.Path == "/blob" {
+				w.Write([]byte{0x1f, 0x8b, 8, 0, 0, 0})
+			} else {
+				w.Write([]byte("0123abcd  debian-13.iso"))
+			}
 		default:
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Write([]byte("https://x.example/a.zip\nhttps://x.example/b.zip"))
 		}
 	}))
 	defer txt.Close()
-	for _, p := range []string{"/readme.txt", "/page"} {
+	for _, p := range []string{"/readme.txt", "/page", "/SHA256SUMS", "/blob"} {
 		if got, err := Read(context.Background(), txt.Client(), txt.URL+p); err != nil || got != txt.URL+p {
 			t.Errorf("%s: got %q, %v", p, got, err)
 		}

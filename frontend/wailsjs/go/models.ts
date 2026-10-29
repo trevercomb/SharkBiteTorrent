@@ -6,6 +6,7 @@ export namespace engine {
 	    size: number;
 	    done: number;
 	    wanted: boolean;
+	    high: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileStatus(source);
@@ -18,6 +19,7 @@ export namespace engine {
 	        this.size = source["size"];
 	        this.done = source["done"];
 	        this.wanted = source["wanted"];
+	        this.high = source["high"];
 	    }
 	}
 	export class PieceRun {
@@ -91,6 +93,12 @@ export namespace engine {
 	    warnings: scan.Warning[];
 	    problem: string;
 	    held: boolean;
+	    firstLast: boolean;
+	    uploaded: number;
+	    downloaded: number;
+	    ratio: number;
+	    seedSeconds: number;
+	    seedLimit: boolean;
 	    confirm: boolean;
 	    scanState: string;
 	    scanEngine: string;
@@ -125,6 +133,12 @@ export namespace engine {
 	        this.warnings = this.convertValues(source["warnings"], scan.Warning);
 	        this.problem = source["problem"];
 	        this.held = source["held"];
+	        this.firstLast = source["firstLast"];
+	        this.uploaded = source["uploaded"];
+	        this.downloaded = source["downloaded"];
+	        this.ratio = source["ratio"];
+	        this.seedSeconds = source["seedSeconds"];
+	        this.seedLimit = source["seedLimit"];
 	        this.confirm = source["confirm"];
 	        this.scanState = source["scanState"];
 	        this.scanEngine = source["scanEngine"];
@@ -581,12 +595,16 @@ export namespace main {
 	    accountRegion: string;
 	    downLimitKB: number;
 	    upLimitKB: number;
+	    seedRatio: number;
+	    seedHours: number;
+	    seedAction: string;
 	    closeToTray: boolean;
 	    autoUpdateCheck: boolean;
 	    skippedVersion: string;
 	    lastUpdateCheck: number;
 	    updateChannel: string;
 	    scanDownloads: boolean;
+	    notifyFinished: boolean;
 	    autoVerify: string;
 	    askSaveLocation: boolean;
 	    recentDirs?: string[];
@@ -607,12 +625,16 @@ export namespace main {
 	        this.accountRegion = source["accountRegion"];
 	        this.downLimitKB = source["downLimitKB"];
 	        this.upLimitKB = source["upLimitKB"];
+	        this.seedRatio = source["seedRatio"];
+	        this.seedHours = source["seedHours"];
+	        this.seedAction = source["seedAction"];
 	        this.closeToTray = source["closeToTray"];
 	        this.autoUpdateCheck = source["autoUpdateCheck"];
 	        this.skippedVersion = source["skippedVersion"];
 	        this.lastUpdateCheck = source["lastUpdateCheck"];
 	        this.updateChannel = source["updateChannel"];
 	        this.scanDownloads = source["scanDownloads"];
+	        this.notifyFinished = source["notifyFinished"];
 	        this.autoVerify = source["autoVerify"];
 	        this.askSaveLocation = source["askSaveLocation"];
 	        this.recentDirs = source["recentDirs"];

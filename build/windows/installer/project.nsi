@@ -170,6 +170,8 @@ Section "uninstall"
     ExecWait '"$INSTDIR\${PRODUCT_EXECUTABLE}" --unregister-associations'
     # And the "start when I sign in" entry, if it was turned on.
     ExecWait '"$INSTDIR\${PRODUCT_EXECUTABLE}" --remove-startup'
+    # The app ID its notifications are shown under (notify_windows.go).
+    DeleteRegKey HKCU "Software\Classes\AppUserModelId\SharkBiteTorrent"
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
