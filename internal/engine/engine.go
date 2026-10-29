@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"os"
 	"path/filepath"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -66,19 +66,22 @@ type Engine struct {
 
 // entry is our per-torrent state on top of anacrolix's.
 type entry struct {
-	t         *torrent.Torrent
-	dir       string
-	storage   *fileStore
-	paused    bool
-	skipped   map[int]bool // file indexes the user doesn't want
-	high      map[int]bool // file indexes the user wants first (priority High)
+	t       *torrent.Torrent
+	dir     string
+	storage *fileStore
+	paused  bool
+	skipped map[int]bool // file indexes the user doesn't want
+	high    map[int]bool // file indexes the user wants first (priority High)
 	// firstLast: each wanted file's first and last piece come first, so a
 	// video can be previewed (players need its start and its index at the end).
 	firstLast bool
-	added     time.Time
-	warnings  []scan.Warning // from the file list, computed once metadata arrives
-	inspected bool
-	checking  atomic.Bool // verifying existing data after a restart
+	// baseUp, baseDown: bytes uploaded and downloaded before this session
+	// (the library counts only since the torrent was added to this client).
+	baseUp, baseDown int64
+	added            time.Time
+	warnings         []scan.Warning // from the file list, computed once metadata arrives
+	inspected        bool
+	checking         atomic.Bool // verifying existing data after a restart
 	// findingPeers: a DHT lookup for it is running (see findPeers).
 	findingPeers atomic.Bool
 	removing     bool  // Remove is deleting its files; guarded by Engine.mu
@@ -403,7 +406,9 @@ type AddOptions struct {
 	High    []int // file indexes to download first
 	// FirstLast: each wanted file's first and last piece first (see entry).
 	FirstLast bool
-	Paused    bool
+	// Uploaded, Downloaded: totals from earlier sessions, which Status adds to.
+	Uploaded, Downloaded int64
+	Paused               bool
 	// Recheck verifies data already on disk before downloading. Set it when
 	// restoring a torrent after a restart: the storage forgets the progress of
 	// unfinished (.part) files, and verifying recovers it.
@@ -450,7 +455,7 @@ func (e *Engine) Add(o AddOptions) (string, error) {
 	st := newFileStore(o.Dir, e.pc, e.ownedDir, o.Adopt)
 	spec.Storage = st
 	en := &entry{dir: o.Dir, storage: st, paused: o.Paused, accepted: o.AcceptWarnings, skipped: map[int]bool{}, high: map[int]bool{},
-		firstLast: o.FirstLast, added: time.Now()}
+		firstLast: o.FirstLast, baseUp: o.Uploaded, baseDown: o.Downloaded, added: time.Now()}
 	for _, i := range o.Skipped {
 		en.skipped[i] = true
 	}
@@ -1064,6 +1069,14 @@ type Status struct {
 	Held bool `json:"held"`
 	// FirstLast: its files' first and last pieces come first (SetFirstLast).
 	FirstLast bool `json:"firstLast"`
+	// Uploaded, Downloaded: bytes sent and received, across sessions (see
+	// AddOptions.Uploaded).
+	Uploaded   int64 `json:"uploaded"`
+	Downloaded int64 `json:"downloaded"`
+	// Ratio, SeedSeconds, SeedLimit: filled in by the app.
+	Ratio       float64 `json:"ratio"`
+	SeedSeconds int64   `json:"seedSeconds"`
+	SeedLimit   bool    `json:"seedLimit"` // paused because it reached the seeding limit
 	// Confirm: added from outside the app, waiting for the user to start
 	// it; filled in by the app.
 	Confirm bool `json:"confirm"`
@@ -1147,6 +1160,7 @@ func (e *Engine) List() []Status {
 		row.Warnings = en.warnings
 		row.Held = len(en.warnings) > 0 && !en.accepted
 		row.FirstLast = en.firstLast
+		row.Uploaded, row.Downloaded = en.baseUp+written, en.baseDown+read
 		row.Verified = en.verified
 		row.Suspect = en.storage.Suspect()
 		if row.Suspect == "" && en.writeErr != nil {

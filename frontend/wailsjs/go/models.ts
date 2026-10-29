@@ -94,6 +94,11 @@ export namespace engine {
 	    problem: string;
 	    held: boolean;
 	    firstLast: boolean;
+	    uploaded: number;
+	    downloaded: number;
+	    ratio: number;
+	    seedSeconds: number;
+	    seedLimit: boolean;
 	    confirm: boolean;
 	    scanState: string;
 	    scanEngine: string;
@@ -129,6 +134,11 @@ export namespace engine {
 	        this.problem = source["problem"];
 	        this.held = source["held"];
 	        this.firstLast = source["firstLast"];
+	        this.uploaded = source["uploaded"];
+	        this.downloaded = source["downloaded"];
+	        this.ratio = source["ratio"];
+	        this.seedSeconds = source["seedSeconds"];
+	        this.seedLimit = source["seedLimit"];
 	        this.confirm = source["confirm"];
 	        this.scanState = source["scanState"];
 	        this.scanEngine = source["scanEngine"];
@@ -585,6 +595,9 @@ export namespace main {
 	    accountRegion: string;
 	    downLimitKB: number;
 	    upLimitKB: number;
+	    seedRatio: number;
+	    seedHours: number;
+	    seedAction: string;
 	    closeToTray: boolean;
 	    autoUpdateCheck: boolean;
 	    skippedVersion: string;
@@ -611,6 +624,9 @@ export namespace main {
 	        this.accountRegion = source["accountRegion"];
 	        this.downLimitKB = source["downLimitKB"];
 	        this.upLimitKB = source["upLimitKB"];
+	        this.seedRatio = source["seedRatio"];
+	        this.seedHours = source["seedHours"];
+	        this.seedAction = source["seedAction"];
 	        this.closeToTray = source["closeToTray"];
 	        this.autoUpdateCheck = source["autoUpdateCheck"];
 	        this.skippedVersion = source["skippedVersion"];

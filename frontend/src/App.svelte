@@ -80,7 +80,7 @@
   })
 
   // Sorting: a column heading cycles ascending → descending → as added.
-  type SortKey = 'name' | 'size' | 'progress' | 'status' | 'down' | 'up' | 'eta' | 'peers'
+  type SortKey = 'name' | 'size' | 'progress' | 'status' | 'down' | 'up' | 'ratio' | 'eta' | 'peers'
   function savedSort(): { key: SortKey | null; desc: boolean } {
     try {
       const s = JSON.parse(localStorage.getItem('listSort') ?? 'null')
@@ -110,10 +110,10 @@
   }
   const etaSeconds = (left: number, rate: number) => (rate > 0 ? left / rate : Infinity)
   const torrentValue = (t: engine.Status, k: SortKey): string | number =>
-    ({ name: t.name || t.hash, size: t.size, progress: t.progress, status: statusText(t), down: t.downRate, up: t.upRate,
+    ({ name: t.name || t.hash, size: t.size, progress: t.progress, status: statusText(t), down: t.downRate, up: t.upRate, ratio: t.ratio,
       eta: t.state === 'downloading' ? etaSeconds(t.size - t.done, t.downRate) : Infinity, peers: t.peers })[k]
   const downloadValue = (d: main.DownloadStatus, k: SortKey): string | number =>
-    ({ name: d.name, size: d.size, progress: dlProgress(d), status: dlStatus(d), down: d.rate, up: 0,
+    ({ name: d.name, size: d.size, progress: dlProgress(d), status: dlStatus(d), down: d.rate, up: 0, ratio: 0,
       eta: d.state === 'running' && d.size > 0 ? etaSeconds(d.size - d.have, d.rate) : Infinity, peers: 0 })[k]
 
   const shownTorrents = $derived(sorted(torrents.filter(t => inGroup(torrentGroup(t)) && nameMatches(t.name || t.hash)), torrentValue))
@@ -392,7 +392,13 @@
     if (removingNow.has(t.hash)) return 'Removing…'
     if (startingNow.has(t.hash)) return 'Starting…'
     if (t.confirm && t.state === 'paused') return 'Waiting for Start'
+    if (t.seedLimit && t.state === 'paused') return 'Seeding limit reached'
     return stateLabel[t.state] ?? t.state
+  }
+
+  function ratioTitle(t: engine.Status): string {
+    const seeded = t.seedSeconds ? `, seeded for ${duration(t.seedSeconds)}` : ''
+    return `Uploaded ${bytes(t.uploaded)}, downloaded ${bytes(t.downloaded)}${seeded}`
   }
 
   function dlStatus(d: main.DownloadStatus): string {
@@ -733,6 +739,7 @@
               <th class="sortable" onclick={() => sortBy('status')}>Status{sortMark('status')}</th>
               <th class="sortable" onclick={() => sortBy('down')}>Down{sortMark('down')}</th>
               <th class="sortable" onclick={() => sortBy('up')}>Up{sortMark('up')}</th>
+              <th class="sortable" onclick={() => sortBy('ratio')} title="Uploaded ÷ downloaded">Ratio{sortMark('ratio')}</th>
               <th class="sortable" onclick={() => sortBy('eta')}>ETA{sortMark('eta')}</th>
               <th class="sortable" onclick={() => sortBy('peers')}>Seeds/Peers{sortMark('peers')}</th>
             </tr>
@@ -768,6 +775,7 @@
                 >{statusText(t)}</td>
                 <td>{rate(t.downRate)}</td>
                 <td>{rate(t.upRate)}</td>
+                <td title={ratioTitle(t)}>{t.uploaded || t.done ? t.ratio.toFixed(2) : '–'}</td>
                 <td>{eta(t)}</td>
                 <td>{t.seeds}/{t.peers}</td>
               </tr>
