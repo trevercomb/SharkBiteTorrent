@@ -84,19 +84,25 @@ func TestApplyPriorities(t *testing.T) {
 		t.Errorf("a.mkv pieces 0/2/4: %v %v %v, want all Normal", piece(0), piece(2), piece(4))
 	}
 
-	// First and last pieces first: a.mkv's ends become High, its middle stays.
+	// First and last pieces first: a.mkv's ends come before everything else
+	// (Next), its middle stays.
 	en.firstLast = true
 	e.applyPriorities(en)
-	if piece(0) != torrent.PiecePriorityHigh || piece(4) != torrent.PiecePriorityHigh {
-		t.Errorf("first-and-last: a.mkv ends %v %v, want High", piece(0), piece(4))
+	if piece(0) != torrent.PiecePriorityNext || piece(4) != torrent.PiecePriorityNext {
+		t.Errorf("first-and-last: a.mkv ends %v %v, want Next", piece(0), piece(4))
 	}
 	if piece(2) != torrent.PiecePriorityNormal {
 		t.Errorf("first-and-last: a.mkv middle %v, want Normal", piece(2))
 	}
 	// Piece 5 holds the skipped b.nfo and the start of the wanted c.mkv: the
 	// wanted file's boost wins.
-	if piece(5) != torrent.PiecePriorityHigh {
-		t.Errorf("shared piece 5: %v, want High (c.mkv's first piece)", piece(5))
+	if piece(5) != torrent.PiecePriorityNext {
+		t.Errorf("shared piece 5: %v, want Next (c.mkv's first piece)", piece(5))
+	}
+	// A High file's ends still come before its middle (seen: with the whole
+	// video High and its ends High too, nothing set them apart).
+	if piece(9) != torrent.PiecePriorityNext || piece(7) != torrent.PiecePriorityHigh {
+		t.Errorf("high c.mkv: last piece %v (want Next), middle %v (want High)", piece(9), piece(7))
 	}
 
 	// Off again: back to the files' own priorities.

@@ -551,7 +551,8 @@ func (e *Engine) Add(o AddOptions) (string, error) {
 
 // applyPriorities gives each file its priority (skipped: None, high: High,
 // else Normal) and, with firstLast, raises each wanted file's first and last
-// piece to High (a piece's own priority outranks its file's).
+// piece to Next: above any file's priority (High included, or a High file's
+// ends would be no different from its middle), below Now (live reading).
 func (e *Engine) applyPriorities(en *entry) {
 	e.mu.Lock()
 	skipped, high := maps.Clone(en.skipped), maps.Clone(en.high)
@@ -577,7 +578,7 @@ func (e *Engine) applyPriorities(en *entry) {
 			}
 			prio := torrent.PiecePriorityNone // no piece-level boost: the file's own priority applies
 			if firstLast && wanted {
-				prio = torrent.PiecePriorityHigh
+				prio = torrent.PiecePriorityNext
 			}
 			en.t.Piece(f.BeginPieceIndex()).SetPriority(prio)
 			en.t.Piece(f.EndPieceIndex() - 1).SetPriority(prio)
