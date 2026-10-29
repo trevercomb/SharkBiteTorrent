@@ -384,8 +384,10 @@
     const ids = list.map(d => d.id).filter(id => !removingNow.has(id))
     removingNow = new Set([...removingNow, ...ids])
     selectedDls = new Set([...selectedDls].filter(id => !ids.includes(id)))
+    // All at once: one file the antivirus is still holding mustn't hold up the rest.
     await run(async () => {
-      for (const id of ids) await RemoveDownload(id, files)
+      const failed = (await Promise.allSettled(ids.map(id => RemoveDownload(id, files)))).filter(r => r.status === 'rejected')
+      if (failed.length) throw (failed[0] as PromiseRejectedResult).reason
     })
     removingNow = new Set([...removingNow].filter(h => !ids.includes(h)))
   }

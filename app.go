@@ -92,12 +92,13 @@ type App struct {
 	shuttingDown bool
 	connMu       sync.Mutex
 	reconnectGen atomic.Uint64
-	sfvChecking  map[string]bool              // torrents whose .sfv is being checked
-	sfvResults   map[string]*engine.SFVStatus // .sfv results not yet in a saved scan record
-	verifyCtx    context.Context              // cancelled on disconnect; stops "Verify files"
-	dl           *downloads                   // direct downloads (downloads.go); guarded by mu
-	hostMu       sync.Mutex                   // guards host
-	host         *hostBrowser                 // the file-host browser window, while open (hostpages_*.go)
+	sfvChecking  map[string]bool               // torrents whose .sfv is being checked
+	sfvResults   map[string]*engine.SFVStatus  // .sfv results not yet in a saved scan record
+	verifyCtx    context.Context               // cancelled on disconnect; stops "Verify files"
+	dl           *downloads                    // direct downloads (downloads.go); guarded by mu
+	dlScanStop   map[string]context.CancelFunc // stops a direct download's running malware scan (downloadscan.go); guarded by mu
+	hostMu       sync.Mutex                    // guards host
+	host         *hostBrowser                  // the file-host browser window, while open (hostpages_*.go)
 }
 
 type VpnStatus struct {

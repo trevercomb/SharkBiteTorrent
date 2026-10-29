@@ -86,7 +86,22 @@ func (a *App) checkDownload(ctx context.Context, m *ddl.Manager, s ddl.Spec) {
 		case !available:
 			rec.Error = name + " isn't installed"
 		default:
-			if !a.runScan(ctx, "dl:"+s.ID, p, false, rec) {
+			// Removing the download stops its scan (see stopDownloadScan):
+			// the antivirus holds the file while scanning, so deleting it
+			// would otherwise wait for a scan nobody needs any more.
+			sctx, cancel := context.WithCancel(ctx)
+			a.mu.Lock()
+			if a.dlScanStop == nil {
+				a.dlScanStop = map[string]context.CancelFunc{}
+			}
+			a.dlScanStop[s.ID] = cancel
+			a.mu.Unlock()
+			ok := a.runScan(sctx, "dl:"+s.ID, p, false, rec)
+			a.mu.Lock()
+			delete(a.dlScanStop, s.ID)
+			a.mu.Unlock()
+			cancel()
+			if !ok {
 				return // quitting: scanned at the next start
 			}
 			if _, err := os.Stat(p); err != nil && len(rec.Threats) > 0 {
@@ -131,4 +146,14 @@ func (a *App) downloadStatus(st ddl.Status, spec ddl.Spec) DownloadStatus {
 		ds.ScanEngine, ds.ScanError = rec.Engine, rec.Error
 	}
 	return ds
+}
+
+// stopDownloadScan ends a download's malware scan if one is running.
+func (a *App) stopDownloadScan(id string) {
+	a.mu.Lock()
+	stop := a.dlScanStop[id]
+	a.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }

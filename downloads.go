@@ -451,6 +451,12 @@ func (a *App) RemoveDownload(id string, deleteFile bool) error {
 	if err != nil {
 		return err
 	}
+	if deleteFile {
+		// No point scanning a file being deleted, and the antivirus would
+		// hold up deleting it until its scan ended. A file that's kept is
+		// still scanned.
+		a.stopDownloadScan(id)
+	}
 	return m.Remove(id, deleteFile)
 }
 
