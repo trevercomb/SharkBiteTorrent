@@ -159,7 +159,10 @@ type savedTorrent struct {
 	Source  string `json:"source"`
 	Dir     string `json:"dir"`
 	Skipped []int  `json:"skipped,omitempty"`
-	Paused  bool   `json:"paused"`
+	High    []int  `json:"high,omitempty"` // files to download first
+	// FirstLast: each wanted file's first and last piece first (previews).
+	FirstLast bool `json:"firstLast,omitempty"`
+	Paused    bool `json:"paused"`
 	// Confirm: added from outside the app (a browser, the file association),
 	// so it waits until the user starts it. It isn't given to the engine
 	// until then: nothing (trackers, DHT, peers) is contacted. Name and Size
@@ -725,7 +728,7 @@ func (a *App) startEngine(tun *tunnel.Tunnel, eng *engine.Engine, st VpnStatus) 
 			continue // waiting for the user: not given to the engine yet
 		}
 		// Adopt only what an older version saved: its files are its own.
-		_, err := eng.Add(engine.AddOptions{Source: s.Source, Dir: s.Dir, Skipped: s.Skipped, Paused: s.Paused, Adopt: s.legacy, AcceptWarnings: s.WarningsAccepted})
+		_, err := eng.Add(engine.AddOptions{Source: s.Source, Dir: s.Dir, Skipped: s.Skipped, High: s.High, FirstLast: s.FirstLast, Paused: s.Paused, Adopt: s.legacy, AcceptWarnings: s.WarningsAccepted})
 		if err != nil {
 			runtime.LogWarningf(a.ctx, "%s", engine.Redact(fmt.Sprintf("restore %s: %v", s.Hash, err)))
 		}
@@ -1406,6 +1409,34 @@ func (a *App) SetFilesWanted(hash string, indexes []int, wanted bool) error {
 		return err
 	}
 	a.updateSaved(hash, func(s *savedTorrent) { s.Skipped = skipped })
+	return nil
+}
+
+// SetFilesHigh marks files to download before the others (or back to normal).
+func (a *App) SetFilesHigh(hash string, indexes []int, high bool) error {
+	eng, err := a.engine()
+	if err != nil {
+		return err
+	}
+	list, err := eng.SetFilesHigh(hash, indexes, high)
+	if err != nil {
+		return err
+	}
+	a.updateSaved(hash, func(s *savedTorrent) { s.High = list })
+	return nil
+}
+
+// SetFirstLast turns "first and last pieces first" on or off for a torrent:
+// each wanted file's start and end come first, so a video can be previewed.
+func (a *App) SetFirstLast(hash string, on bool) error {
+	eng, err := a.engine()
+	if err != nil {
+		return err
+	}
+	if err := eng.SetFirstLast(hash, on); err != nil {
+		return err
+	}
+	a.updateSaved(hash, func(s *savedTorrent) { s.FirstLast = on })
 	return nil
 }
 

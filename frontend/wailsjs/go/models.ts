@@ -6,6 +6,7 @@ export namespace engine {
 	    size: number;
 	    done: number;
 	    wanted: boolean;
+	    high: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileStatus(source);
@@ -18,6 +19,7 @@ export namespace engine {
 	        this.size = source["size"];
 	        this.done = source["done"];
 	        this.wanted = source["wanted"];
+	        this.high = source["high"];
 	    }
 	}
 	export class PieceRun {
@@ -91,6 +93,7 @@ export namespace engine {
 	    warnings: scan.Warning[];
 	    problem: string;
 	    held: boolean;
+	    firstLast: boolean;
 	    confirm: boolean;
 	    scanState: string;
 	    scanEngine: string;
@@ -125,6 +128,7 @@ export namespace engine {
 	        this.warnings = this.convertValues(source["warnings"], scan.Warning);
 	        this.problem = source["problem"];
 	        this.held = source["held"];
+	        this.firstLast = source["firstLast"];
 	        this.confirm = source["confirm"];
 	        this.scanState = source["scanState"];
 	        this.scanEngine = source["scanEngine"];

@@ -5,7 +5,7 @@
     GetVpnStatus, ListTorrents, GetSettings,
     Pause, Resume, Remove, Reconnect, OpenFolder, ChooseDownloadDir,
     InstallUpdate, DownloadUpdate, SkipUpdate, OpenURL, VerifyTorrent, StartTorrent,
-    ListDownloads, PauseDownload, ResumeDownload, RemoveDownload, GetNewLink, OpenDownloadFolder,
+    ListDownloads, PauseDownload, ResumeDownload, RemoveDownload, GetNewLink, OpenDownloadFolder, SetFirstLast,
     AddMagnetTo, ChooseTorrentFiles, AddTorrentFiles, StartTorrentIn, ChooseDirectory,
   } from '../wailsjs/go/main/App.js'
   import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js'
@@ -805,6 +805,12 @@
       disabled={menu.t.verifying || menu.t.state === 'metadata' || menu.t.state === 'needs-torrent-file'}
       onclick={() => menuAction(t => VerifyTorrent(t.hash))}
     >Verify files</button>
+    {#if menu.t.state !== 'seeding' && menu.t.state !== 'metadata'}
+      <button role="menuitem" title="Each file's first and last pieces come first, so a video can be previewed while the rest downloads"
+        onclick={() => menuAction(t => SetFirstLast(t.hash, !t.firstLast))}>
+        {menu.t.firstLast ? '✓ ' : ''}First and last pieces first
+      </button>
+    {/if}
     <div class="menu-sep"></div>
     <button role="menuitem" onclick={() => { removing = menu!.t; deleteFiles = false; menu = null }}>Remove…</button>
   </div>

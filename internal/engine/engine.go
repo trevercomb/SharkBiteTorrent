@@ -12,6 +12,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -69,6 +71,10 @@ type entry struct {
 	storage   *fileStore
 	paused    bool
 	skipped   map[int]bool // file indexes the user doesn't want
+	high      map[int]bool // file indexes the user wants first (priority High)
+	// firstLast: each wanted file's first and last piece come first, so a
+	// video can be previewed (players need its start and its index at the end).
+	firstLast bool
 	added     time.Time
 	warnings  []scan.Warning // from the file list, computed once metadata arrives
 	inspected bool
@@ -376,7 +382,10 @@ type AddOptions struct {
 	// records: its existing files are adopted as its own (see ownership.go).
 	Adopt   bool
 	Skipped []int // file indexes not to download
-	Paused  bool
+	High    []int // file indexes to download first
+	// FirstLast: each wanted file's first and last piece first (see entry).
+	FirstLast bool
+	Paused    bool
 	// Recheck verifies data already on disk before downloading. Set it when
 	// restoring a torrent after a restart: the storage forgets the progress of
 	// unfinished (.part) files, and verifying recovers it.
@@ -422,9 +431,13 @@ func (e *Engine) Add(o AddOptions) (string, error) {
 	}
 	st := newFileStore(o.Dir, e.pc, e.ownedDir, o.Adopt)
 	spec.Storage = st
-	en := &entry{dir: o.Dir, storage: st, paused: o.Paused, accepted: o.AcceptWarnings, skipped: map[int]bool{}, added: time.Now()}
+	en := &entry{dir: o.Dir, storage: st, paused: o.Paused, accepted: o.AcceptWarnings, skipped: map[int]bool{}, high: map[int]bool{},
+		firstLast: o.FirstLast, added: time.Now()}
 	for _, i := range o.Skipped {
 		en.skipped[i] = true
+	}
+	for _, i := range o.High {
+		en.high[i] = true
 	}
 	e.entries[spec.InfoHash] = en
 	e.mu.Unlock()
@@ -518,19 +531,38 @@ func (e *Engine) Add(o AddOptions) (string, error) {
 	return t.InfoHash().HexString(), nil
 }
 
-// applyPriorities marks wanted files Normal and skipped ones None.
+// applyPriorities gives each file its priority (skipped: None, high: High,
+// else Normal) and, with firstLast, raises each wanted file's first and last
+// piece to High (a piece's own priority outranks its file's).
 func (e *Engine) applyPriorities(en *entry) {
 	e.mu.Lock()
-	skipped := make(map[int]bool, len(en.skipped))
-	for k, v := range en.skipped {
-		skipped[k] = v
-	}
+	skipped, high := maps.Clone(en.skipped), maps.Clone(en.high)
+	firstLast := en.firstLast
 	e.mu.Unlock()
-	for i, f := range en.t.Files() {
-		if skipped[i] {
+	files := en.t.Files()
+	for i, f := range files {
+		switch {
+		case skipped[i]:
 			f.SetPriority(torrent.PiecePriorityNone)
-		} else {
+		case high[i]:
+			f.SetPriority(torrent.PiecePriorityHigh)
+		default:
 			f.SetPriority(torrent.PiecePriorityNormal)
+		}
+	}
+	// The ends of skipped files first, so a piece a wanted file shares with
+	// a skipped neighbour keeps the wanted file's setting.
+	for _, wanted := range []bool{false, true} {
+		for i, f := range files {
+			if skipped[i] == wanted || f.Length() == 0 {
+				continue
+			}
+			prio := torrent.PiecePriorityNone // no piece-level boost: the file's own priority applies
+			if firstLast && wanted {
+				prio = torrent.PiecePriorityHigh
+			}
+			en.t.Piece(f.BeginPieceIndex()).SetPriority(prio)
+			en.t.Piece(f.EndPieceIndex() - 1).SetPriority(prio)
 		}
 	}
 }
@@ -896,6 +928,7 @@ type FileStatus struct {
 	Size   int64  `json:"size"`
 	Done   int64  `json:"done"`
 	Wanted bool   `json:"wanted"`
+	High   bool   `json:"high"` // downloaded first (priority High)
 }
 
 // Files lists a torrent's files; empty until metadata is available.
@@ -918,6 +951,7 @@ func (e *Engine) Files(hash string) ([]FileStatus, error) {
 			Size:   f.Length(),
 			Done:   f.BytesCompleted(),
 			Wanted: !en.skipped[i],
+			High:   !en.skipped[i] && en.high[i],
 		}
 	}
 	return out, nil
@@ -950,6 +984,47 @@ func (e *Engine) SetFilesWanted(hash string, indexes []int, wanted bool) ([]int,
 	return skipped, nil
 }
 
+// SetFilesHigh marks files to download before the others (or not) and
+// returns the full list of such indexes (for persisting).
+func (e *Engine) SetFilesHigh(hash string, indexes []int, high bool) ([]int, error) {
+	en, err := e.find(hash)
+	if err != nil {
+		return nil, err
+	}
+	e.mu.Lock()
+	for _, i := range indexes {
+		if high {
+			en.high[i] = true
+		} else {
+			delete(en.high, i)
+		}
+	}
+	out := slices.Sorted(maps.Keys(en.high))
+	e.mu.Unlock()
+	if en.t.Info() != nil {
+		e.applyPriorities(en)
+	}
+	if out == nil {
+		out = []int{}
+	}
+	return out, nil
+}
+
+// SetFirstLast turns "first and last pieces first" on or off for a torrent.
+func (e *Engine) SetFirstLast(hash string, on bool) error {
+	en, err := e.find(hash)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	en.firstLast = on
+	e.mu.Unlock()
+	if en.t.Info() != nil {
+		e.applyPriorities(en)
+	}
+	return nil
+}
+
 type Status struct {
 	Hash     string  `json:"hash"`
 	Name     string  `json:"name"`
@@ -968,6 +1043,8 @@ type Status struct {
 	Problem string `json:"problem"`
 	// Held: it has warnings the user hasn't accepted (see AcceptWarnings).
 	Held bool `json:"held"`
+	// FirstLast: its files' first and last pieces come first (SetFirstLast).
+	FirstLast bool `json:"firstLast"`
 	// Confirm: added from outside the app, waiting for the user to start
 	// it; filled in by the app.
 	Confirm bool `json:"confirm"`
@@ -1050,6 +1127,7 @@ func (e *Engine) List() []Status {
 		}
 		row.Warnings = en.warnings
 		row.Held = len(en.warnings) > 0 && !en.accepted
+		row.FirstLast = en.firstLast
 		row.Verified = en.verified
 		row.Suspect = en.storage.Suspect()
 		if row.Suspect == "" && en.writeErr != nil {
