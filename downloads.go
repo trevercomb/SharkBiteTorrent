@@ -210,6 +210,13 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 			return []paste.Link{l}, nil
 		}
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		site := "the site"
+		if u, perr := url.Parse(strings.TrimSpace(input)); perr == nil && u.Host != "" {
+			site = u.Hostname()
+		}
+		return nil, fmt.Errorf("%s didn't answer within a minute. Some sites ignore VPN addresses: try again later, or another VPN region in Settings", site)
+	}
 	if err != nil {
 		return nil, errors.New(paste.WithoutFragments(err.Error())) // Go's errors quote the address, key and all
 	}
