@@ -225,6 +225,20 @@ func (a *App) driveHostBrowser(h *hostBrowser) {
 			case <-h.wake:
 				continue
 			case <-time.After(3 * time.Second): // nothing more to do
+				// Unless pages were queued just now: openHostPages queues
+				// with hostMu held, so with it held an empty queue stays
+				// empty, and from here new pages get a window of their own.
+				a.hostMu.Lock()
+				h.mu.Lock()
+				more := len(h.queue) > 0
+				h.mu.Unlock()
+				if !more && a.host == h {
+					a.host = nil
+				}
+				a.hostMu.Unlock()
+				if more {
+					continue
+				}
 				return
 			case <-h.win.Done():
 				return

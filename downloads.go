@@ -39,6 +39,7 @@ type downloads struct {
 	m       *ddl.Manager
 	limiter *rate.Limiter
 	save    chan struct{} // asks the saver to write downloads.json soon
+	writeMu sync.Mutex    // one write at a time, each with the list as it is then
 	stop    context.CancelFunc
 
 	clientMu  sync.Mutex
@@ -105,6 +106,8 @@ func (a *App) saveDownloadsLoop(d *downloads) {
 }
 
 func (a *App) writeDownloads(d *downloads) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 	data, _ := json.MarshalIndent(d.m.Specs(), "", "  ")
 	if err := writeFile(a.downloadsPath(), data); err != nil {
 		runtime.LogErrorf(a.ctx, "save downloads: %v", err)
