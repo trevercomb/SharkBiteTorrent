@@ -588,6 +588,8 @@
                 <td class="name" title={d.name}>
                   {#if d.scan === 'threat' || (d.scan === 'gone' && d.threats.length)}
                     <span class="flag threat" title="{d.scanEngine} found: {d.threats.join(', ')}">⚠</span>
+                  {:else if (d.warnings ?? []).length > 0}
+                    <span class="flag caution" title={(d.warnings ?? []).map(w => w.reason).join('\n')}>⚠</span>
                   {/if}
                   {d.name || 'Starting…'}
                 </td>

@@ -27,6 +27,9 @@ type DownloadStatus struct {
 	ScanEngine string   `json:"scanEngine"`
 	Threats    []string `json:"threats"`
 	ScanError  string   `json:"scanError"`
+	// Warnings: what its name gives away (a program named like a video, a
+	// double extension), as for torrents' file lists (scan.Inspect).
+	Warnings []scan.Warning `json:"warnings"`
 }
 
 type downloadMeta struct {
@@ -117,7 +120,10 @@ func (a *App) checkDownload(ctx context.Context, m *ddl.Manager, s ddl.Spec) {
 
 // downloadStatus adds a download's scan result for the UI.
 func (a *App) downloadStatus(st ddl.Status, spec ddl.Spec) DownloadStatus {
-	ds := DownloadStatus{Status: st, Threats: []string{}}
+	ds := DownloadStatus{Status: st, Threats: []string{}, Warnings: []scan.Warning{}}
+	if st.Name != "" {
+		ds.Warnings = append(ds.Warnings, scan.Inspect([]scan.File{{Path: st.Name, Size: st.Size}})...)
+	}
 	a.mu.Lock()
 	scanning := a.scanning["dl:"+st.ID]
 	a.mu.Unlock()
