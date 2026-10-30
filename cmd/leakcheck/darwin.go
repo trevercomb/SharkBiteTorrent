@@ -1262,7 +1262,8 @@ func (r *pktapResult) forWatched(w *macWatch, local map[string]bool, mdns map[in
 		default:
 			continue // someone else's
 		}
-		f := flow{proto: k.proto, src: k.src, dst: k.dst, sport: k.sport, dport: k.dport, packets: s.n}
+		f := flow{proto: k.proto, src: k.src, dst: k.dst, sport: k.sport, dport: k.dport, packets: s.n,
+			who: fmt.Sprintf("%s PID %d", clientName(r, pid), pid)}
 		switch {
 		case pid != root:
 			f.notDocumented = "not from the app's main process"
