@@ -22,6 +22,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/time/rate"
 
 	"sharkbite/internal/engine"
 	"sharkbite/internal/platform"
@@ -96,6 +97,7 @@ type App struct {
 	sfvResults   map[string]*engine.SFVStatus  // .sfv results not yet in a saved scan record
 	verifyCtx    context.Context               // cancelled on disconnect; stops "Verify files"
 	dl           *downloads                    // direct downloads (downloads.go); guarded by mu
+	downLimiter  *rate.Limiter                 // the download speed limit, for torrents and direct downloads together
 	direct       directConns                   // made in "No VPN" mode; closed when the mode changes (directconns.go)
 	dlScanStop   map[string]context.CancelFunc // stops a direct download's running malware scan (downloadscan.go); guarded by mu
 	hostMu       sync.Mutex                    // guards host
@@ -211,6 +213,7 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.loadSettings()
+	a.downLimiter = engine.NewLimiter(a.settings.DownLimitKB * 1024)
 	a.loadSaved()
 	a.startDownloads()
 	a.noteUncleanExit()
@@ -662,7 +665,8 @@ func (a *App) connectPrepared(prep *preparedConn) {
 		ForwardedPort: port,
 		DownLimit:     set.DownLimitKB * 1024,
 		UpLimit:       set.UpLimitKB * 1024,
-		StateDir:      a.configDir, // download progress database
+		Down:          a.downLimiter, // shared with direct downloads
+		StateDir:      a.configDir,   // download progress database
 	})
 	if err != nil {
 		tun.Close()
@@ -688,6 +692,7 @@ func (a *App) connectDirect(set Settings) {
 	eng, err := engine.New(nil, engine.Options{
 		DownLimit: set.DownLimitKB * 1024,
 		UpLimit:   set.UpLimitKB * 1024,
+		Down:      a.downLimiter,
 		StateDir:  a.configDir,
 	})
 	if err != nil {
@@ -1518,8 +1523,9 @@ func (a *App) SaveSettings(s Settings) error {
 	}
 	if eng != nil {
 		eng.SetLimits(s.DownLimitKB*1024, s.UpLimitKB*1024)
+	} else if a.downLimiter != nil {
+		engine.SetLimit(a.downLimiter, s.DownLimitKB*1024) // shared with direct downloads, which may run meanwhile
 	}
-	a.setDownloadLimit(s.DownLimitKB)
 	if old.UpdateChannel != s.UpdateChannel && a.ctx != nil {
 		// An update offered on the other channel no longer applies.
 		runtime.EventsEmit(a.ctx, "update-channel-changed")

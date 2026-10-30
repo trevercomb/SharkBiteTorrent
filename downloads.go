@@ -52,7 +52,7 @@ func (a *App) downloadsPath() string { return filepath.Join(a.configDir, "downlo
 // startDownloads restores saved downloads; they wait until the VPN is up.
 func (a *App) startDownloads() {
 	d := &downloads{
-		limiter: rate.NewLimiter(rate.Inf, 1<<20),
+		limiter: a.downLimiter, // the torrents' too: the limit is for both
 		save:    make(chan struct{}, 1),
 	}
 	d.m = &ddl.Manager{
@@ -77,9 +77,7 @@ func (a *App) startDownloads() {
 	}
 	a.mu.Lock()
 	a.dl = d
-	limit := a.settings.DownLimitKB
 	a.mu.Unlock()
-	a.setDownloadLimit(limit)
 
 	var specs []ddl.Spec
 	if data, err := os.ReadFile(a.downloadsPath()); err == nil {
@@ -125,20 +123,6 @@ func (a *App) stopDownloads() {
 	d.stop()
 	d.m.Close()
 	a.writeDownloads(d)
-}
-
-func (a *App) setDownloadLimit(kb int64) {
-	a.mu.Lock()
-	d := a.dl
-	a.mu.Unlock()
-	if d == nil {
-		return
-	}
-	if kb <= 0 {
-		d.limiter.SetLimit(rate.Inf)
-	} else {
-		d.limiter.SetLimit(rate.Limit(kb * 1024))
-	}
 }
 
 // downloadClient is the HTTP client for downloads: the VPN's, or the normal
