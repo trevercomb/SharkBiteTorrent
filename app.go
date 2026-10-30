@@ -1071,17 +1071,15 @@ func (a *App) addSourceTo(src string, external bool, choice AddChoice) error {
 	if err := ensureDownloadDir(dir); err != nil {
 		return err
 	}
-	hash, err := eng.Add(engine.AddOptions{Source: src, Dir: dir})
+	// "Add paused" adds it paused, rather than pausing it once it's running.
+	hash, err := eng.Add(engine.AddOptions{Source: src, Dir: dir, Paused: choice.Paused})
 	if err != nil {
 		return err
 	}
-	if err := a.recordAdded(hash, src, dir); err != nil {
+	if err := a.recordAdded(hash, src, dir, choice.Paused); err != nil {
 		return err
 	}
 	a.noteRecentDir(dir)
-	if choice.Paused {
-		return a.setPaused(hash, true, false)
-	}
 	return nil
 }
 
@@ -1145,7 +1143,7 @@ func insideHome(dir string) bool {
 
 // recordAdded saves a torrent the engine has just been given from inside the
 // app (checked: never adopted as an older version's).
-func (a *App) recordAdded(hash, src, dir string) error {
+func (a *App) recordAdded(hash, src, dir string, paused bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for i := range a.saved {
@@ -1155,12 +1153,13 @@ func (a *App) recordAdded(hash, src, dir string) error {
 			// entry already running keeps its own folder, as the engine does.
 			if s := &a.saved[i]; s.Confirm {
 				s.Confirm, s.Checked, s.legacy, s.Dir, s.Source, s.Name, s.Size = false, true, false, dir, src, "", 0
+				s.Paused = paused
 				return a.writeSaved()
 			}
 			return nil
 		}
 	}
-	a.saved = append(a.saved, savedTorrent{Hash: hash, Source: src, Dir: dir, Checked: true})
+	a.saved = append(a.saved, savedTorrent{Hash: hash, Source: src, Dir: dir, Checked: true, Paused: paused})
 	return a.writeSaved()
 }
 
