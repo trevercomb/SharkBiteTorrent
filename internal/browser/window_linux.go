@@ -147,6 +147,13 @@ static int open_window(const char *proxy, const char *datadir, const char *title
 	G_GNUC_END_IGNORE_DEPRECATIONS
 	webkit_settings_set_enable_webrtc(s, FALSE);
 	webkit_settings_set_enable_media_stream(s, FALSE);
+	// No audio or video at all (as on macOS): a download page needs none,
+	// and an <audio> element made WebKit set up GStreamer, which hung the
+	// page where GStreamer's audio output plugin isn't installed.
+	webkit_settings_set_enable_media(s, FALSE);
+	webkit_settings_set_enable_webaudio(s, FALSE);
+	webkit_settings_set_enable_mediasource(s, FALSE);
+	webkit_settings_set_enable_encrypted_media(s, FALSE);
 	// Pop-ups reach on_create (which never opens one): refused outright, an
 	// ad script that hijacks the download button's click to open one keeps
 	// retrying on every click.
