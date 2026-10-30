@@ -102,7 +102,7 @@ func TestAddedTorrentsNeverLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := t.TempDir() // the download folder changed meanwhile
-	if err := a.recordAdded(ih, link, other); err != nil {
+	if err := a.recordAdded(ih, link, other, false); err != nil {
 		t.Fatal(err)
 	}
 	b := &App{configDir: a.configDir} // restart

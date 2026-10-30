@@ -62,6 +62,9 @@ type Spec struct {
 	Done     bool      `json:"done,omitempty"`
 	Error    string    `json:"error,omitempty"` // why it failed or needs a link
 	NeedLink bool      `json:"needLink,omitempty"`
+	// FileID: the part file's identity from Manager.Identify when it was
+	// created; only that file is deleted with the download.
+	FileID string `json:"fileId,omitempty"`
 	// Meta is the app's own data about the download (its malware scan),
 	// kept and saved with it but never looked at here.
 	Meta json.RawMessage `json:"meta,omitempty"`
@@ -79,6 +82,9 @@ type Status struct {
 	Error string `json:"error"`
 	// Offline: running, but waiting for a connection (the VPN is down).
 	Offline bool `json:"offline"`
+	// Waiting: running, but its folder isn't available (a drive or network
+	// share that's away); why.
+	Waiting string `json:"waiting"`
 }
 
 // ErrLinkExpired means the server refused a link that worked before (or
@@ -106,6 +112,14 @@ type Manager struct {
 	// it takes its own name, so it's never there unmarked (the app marks it
 	// as downloaded from the internet).
 	Finishing func(path string)
+	// FolderReady, if set, says whether a download's folder can be written
+	// to now (creating it if need be); while it can't, the download waits.
+	// Without it the folder is just created.
+	FolderReady func(dir string) error
+	// Identify and SameFile, if set, record a part file's identity and
+	// check it before deleting: Remove only deletes the file it created.
+	Identify func(path string) (string, error)
+	SameFile func(id, path string) bool
 
 	mu   sync.Mutex
 	jobs map[string]*job
@@ -120,7 +134,8 @@ type job struct {
 
 	// live positions (written, maybe not yet synced), guarded by Manager.mu
 	pos     []int64
-	offline bool // waiting for a connection; guarded by Manager.mu
+	offline bool   // waiting for a connection; guarded by Manager.mu
+	waiting string // its folder isn't available: why; guarded by Manager.mu
 
 	rateAt   time.Time
 	rateHave int64
@@ -171,7 +186,12 @@ func (m *Manager) Add(s Spec) error {
 		j.state = Failed
 	}
 	if s.Name != "" && !s.Done && len(s.Segments) == 0 {
-		j.spec.Name = m.unusedNameLocked(j, SafeName(s.Name))
+		// A name that's nothing once made safe ("..") leaves it to the server.
+		if n := SafeName(s.Name); n != "" {
+			j.spec.Name = m.unusedNameLocked(j, n)
+		} else {
+			j.spec.Name = ""
+		}
 	}
 	m.jobs[s.ID] = j
 	m.ord = append(m.ord, s.ID)
@@ -298,6 +318,16 @@ func (m *Manager) Remove(id string, deleteFile bool) error {
 	if spec.Done {
 		p = filepath.Join(spec.Dir, spec.Name)
 	}
+	// Only the file it created: not another one put there since (saved by a
+	// version that didn't record identities: by name, as then).
+	if spec.FileID != "" && m.SameFile != nil {
+		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if !m.SameFile(spec.FileID, p) {
+			return fmt.Errorf("not deleting %s: it isn't the file this download created", spec.Name)
+		}
+	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -352,7 +382,7 @@ func (m *Manager) Statuses() []Status {
 		}
 		out = append(out, Status{ID: id, Name: j.spec.Name, Dir: j.spec.Dir, Page: j.spec.Page,
 			Size: j.spec.Size, Have: have, Rate: j.rate, State: j.state, Error: j.spec.Error,
-			Offline: j.state == Running && j.offline})
+			Offline: j.state == Running && j.offline, Waiting: j.waiting})
 	}
 	return out
 }
@@ -426,14 +456,22 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 	if !plainName(spec.Name) {
 		return fmt.Errorf("%q isn't a usable file name", spec.Name)
 	}
-	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
+	if err := m.waitForFolder(ctx, j, spec.Dir); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(partPath(spec), os.O_RDWR|os.O_CREATE, 0o644)
+	f, created, err := openPart(partPath(spec))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	if created && m.Identify != nil {
+		if id, err := m.Identify(partPath(spec)); err == nil {
+			m.mu.Lock()
+			j.spec.FileID = id
+			m.mu.Unlock()
+			m.changed()
+		}
+	}
 	// Segments write all over the file from the start: give it its full
 	// size up front, without the filesystem filling the gaps with zeros.
 	makeSparse(f) // best effort: on filesystems without sparse files it's just slower
@@ -492,8 +530,8 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 	if m.Finishing != nil {
 		m.Finishing(partPath(spec))
 	}
-	final := freeName(spec.Dir, spec.Name)
-	if err := os.Rename(partPath(spec), filepath.Join(spec.Dir, final)); err != nil {
+	final, err := takeName(partPath(spec), spec.Dir, spec.Name)
+	if err != nil {
 		return err
 	}
 	m.mu.Lock()
@@ -913,4 +951,82 @@ func numbered(name string, taken func(string) bool) string {
 			return n
 		}
 	}
+}
+
+// folderRetry: how often a download whose folder is away checks again.
+var folderRetry = 30 * time.Second
+
+// waitForFolder waits until the download's folder can be written to (a
+// network share or drive that's away: never into the empty mount point).
+func (m *Manager) waitForFolder(ctx context.Context, j *job, dir string) error {
+	defer func() {
+		m.mu.Lock()
+		j.waiting = ""
+		m.mu.Unlock()
+	}()
+	for {
+		var err error
+		if m.FolderReady != nil {
+			err = m.FolderReady(dir)
+		} else {
+			err = os.MkdirAll(dir, 0o755)
+		}
+		if err == nil {
+			return nil
+		}
+		m.mu.Lock()
+		j.waiting = err.Error()
+		m.mu.Unlock()
+		select {
+		case <-time.After(folderRetry):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+// openPart opens a download's part file: created new (never through
+// something already there), or the existing one only if it's a plain file
+// and still the same file once open (not a link put in its place).
+func openPart(p string) (f *os.File, created bool, err error) {
+	st, err := os.Lstat(p)
+	if errors.Is(err, os.ErrNotExist) {
+		f, err = os.OpenFile(p, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		return f, err == nil, err
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("%s isn't a plain file", filepath.Base(p))
+	}
+	f, err = os.OpenFile(p, os.O_RDWR, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	if fst, err := f.Stat(); err != nil || !os.SameFile(st, fst) {
+		f.Close()
+		return nil, false, fmt.Errorf("%s changed while being opened", filepath.Base(p))
+	}
+	return f, false, nil
+}
+
+// takeName gives the finished part file its name, or "name (2).ext" etc.,
+// never replacing a file: a hard link fails if the name was taken in the
+// meantime. Where hard links aren't supported (some network shares, FAT),
+// it's renamed into a name that was free a moment ago.
+func takeName(part, dir, name string) (string, error) {
+	for range 100 {
+		final := freeName(dir, name)
+		err := os.Link(part, filepath.Join(dir, final))
+		if err == nil {
+			os.Remove(part)
+			return final, nil
+		}
+		if errors.Is(err, os.ErrExist) {
+			continue // taken just now: the next free name
+		}
+		return final, os.Rename(part, filepath.Join(dir, final))
+	}
+	return "", fmt.Errorf("no free name for %s", name)
 }

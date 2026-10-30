@@ -18,12 +18,34 @@ void sbw_wakeup(void) { dispatch_async_f(dispatch_get_main_queue(), NULL, run_qu
 
 static char *cstr(NSString *s) { return (char *)(s ? s.UTF8String : ""); }
 
-// Every navigation in a pop-up's stand-in is refused (nothing loads).
+// Certificates are checked without going online: macOS would otherwise
+// fetch revocation data or missing certificates itself, outside the VPN
+// (as the app's own connections never do; a server that doesn't send its
+// full chain fails, as it does for the app).
+static void checkOffline(NSURLAuthenticationChallenge *ch, void (^h)(NSURLSessionAuthChallengeDisposition, NSURLCredential *)) {
+	if (![ch.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
+		h(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+		return;
+	}
+	SecTrustRef trust = ch.protectionSpace.serverTrust;
+	if (!trust || SecTrustSetNetworkFetchAllowed(trust, false) != errSecSuccess || !SecTrustEvaluateWithError(trust, NULL)) {
+		h(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+		return;
+	}
+	h(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:trust]);
+}
+
+// Every navigation in a pop-up's stand-in is refused (nothing loads). A page
+// can still write into it (an image in its blank document): its
+// certificates are checked offline too.
 @interface SBDenyAll : NSObject <WKNavigationDelegate>
 @end
 @implementation SBDenyAll
 - (void)webView:(WKWebView *)v decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
 	h(WKNavigationActionPolicyCancel);
+}
+- (void)webView:(WKWebView *)v didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)ch completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))h {
+	checkOffline(ch, h);
 }
 @end
 static SBDenyAll *denyAll;
@@ -88,21 +110,8 @@ static SBDenyAll *denyAll;
 	h([dir URLByAppendingPathComponent:n]);
 }
 
-// Certificates are checked without going online: macOS would otherwise
-// fetch revocation data or missing certificates itself, outside the VPN
-// (as the app's own connections never do; a server that doesn't send its
-// full chain fails, as it does for the app).
 - (void)webView:(WKWebView *)v didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)ch completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))h {
-	if (![ch.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
-		h(NSURLSessionAuthChallengePerformDefaultHandling, nil);
-		return;
-	}
-	SecTrustRef trust = ch.protectionSpace.serverTrust;
-	if (!trust || SecTrustSetNetworkFetchAllowed(trust, false) != errSecSuccess || !SecTrustEvaluateWithError(trust, NULL)) {
-		h(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
-		return;
-	}
-	h(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:trust]);
+	checkOffline(ch, h);
 }
 
 // A pop-up the page asked for: reported, and nothing opens. The page gets a

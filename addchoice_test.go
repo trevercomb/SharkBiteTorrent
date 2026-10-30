@@ -69,6 +69,8 @@ func TestLocalHost(t *testing.T) {
 	for host, want := range map[string]bool{
 		"localhost": true, "app.localhost": true, "127.0.0.1": true, "::1": true,
 		"192.168.4.26": true, "10.0.0.5": true, "172.16.1.1": true, "fe80::1": true,
+		"100.101.102.103": true, "100.64.0.1": true, "224.0.0.251": true, // Tailscale/CGNAT, multicast
+		"100.128.0.1": false,
 		"dl-cdn.alpinelinux.org": false, "1.1.1.1": false, "2606:4700::1111": false, "172.32.0.1": false,
 	} {
 		if got := localHost(host); got != want {

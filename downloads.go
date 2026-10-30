@@ -39,6 +39,7 @@ type downloads struct {
 	m       *ddl.Manager
 	limiter *rate.Limiter
 	save    chan struct{} // asks the saver to write downloads.json soon
+	writeMu sync.Mutex    // one write at a time, each with the list as it is then
 	stop    context.CancelFunc
 
 	clientMu  sync.Mutex
@@ -52,7 +53,7 @@ func (a *App) downloadsPath() string { return filepath.Join(a.configDir, "downlo
 // startDownloads restores saved downloads; they wait until the VPN is up.
 func (a *App) startDownloads() {
 	d := &downloads{
-		limiter: rate.NewLimiter(rate.Inf, 1<<20),
+		limiter: a.downLimiter, // the torrents' too: the limit is for both
 		save:    make(chan struct{}, 1),
 	}
 	d.m = &ddl.Manager{
@@ -63,6 +64,11 @@ func (a *App) startDownloads() {
 		// Marked from the internet the moment it's whole, not when its scan
 		// comes up (another file's scan can take a while).
 		Finishing: scan.MarkDownloaded,
+		// As for torrents: never into a drive's empty mount point while
+		// it's away, and only ever deleting the file it created.
+		FolderReady: ensureDownloadDir,
+		Identify:    engine.FileID,
+		SameFile:    engine.SameFileID,
 		OnChange: func() {
 			select {
 			case d.save <- struct{}{}:
@@ -72,9 +78,7 @@ func (a *App) startDownloads() {
 	}
 	a.mu.Lock()
 	a.dl = d
-	limit := a.settings.DownLimitKB
 	a.mu.Unlock()
-	a.setDownloadLimit(limit)
 
 	var specs []ddl.Spec
 	if data, err := os.ReadFile(a.downloadsPath()); err == nil {
@@ -102,6 +106,8 @@ func (a *App) saveDownloadsLoop(d *downloads) {
 }
 
 func (a *App) writeDownloads(d *downloads) {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 	data, _ := json.MarshalIndent(d.m.Specs(), "", "  ")
 	if err := writeFile(a.downloadsPath(), data); err != nil {
 		runtime.LogErrorf(a.ctx, "save downloads: %v", err)
@@ -120,20 +126,6 @@ func (a *App) stopDownloads() {
 	d.stop()
 	d.m.Close()
 	a.writeDownloads(d)
-}
-
-func (a *App) setDownloadLimit(kb int64) {
-	a.mu.Lock()
-	d := a.dl
-	a.mu.Unlock()
-	if d == nil {
-		return
-	}
-	if kb <= 0 {
-		d.limiter.SetLimit(rate.Inf)
-	} else {
-		d.limiter.SetLimit(rate.Limit(kb * 1024))
-	}
 }
 
 // downloadClient is the HTTP client for downloads: the VPN's, or the normal
@@ -159,9 +151,12 @@ func (a *App) downloadClient() (*http.Client, error) {
 	}
 	if a.directMode() {
 		if d.direct == nil {
-			dialer := &net.Dialer{Timeout: 30 * time.Second, Resolver: &net.Resolver{}}
 			d.direct = &http.Client{Transport: &http.Transport{
-				DialContext:           dialer.DialContext,
+				// Not this computer or the home network, even by a redirect
+				// or a name that resolves there; closed if the VPN mode changes.
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return a.direct.dial(ctx, network, addr, true)
+				},
 				TLSHandshakeTimeout:   30 * time.Second,
 				ResponseHeaderTimeout: 60 * time.Second,
 			}}
@@ -193,9 +188,13 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The VPN can't reach this computer or the home network: say so at once
-	// rather than after the minute a request there takes to give up.
-	if u, err := url.Parse(strings.TrimSpace(input)); err == nil && localHost(u.Hostname()) && !a.directMode() {
+	// The VPN can't reach this computer or the home network, and without it
+	// the app doesn't go there either (a page's links mustn't make it send
+	// requests to the router): say so at once.
+	if u, err := url.Parse(strings.TrimSpace(input)); err == nil && localHost(u.Hostname()) {
+		if a.directMode() {
+			return nil, fmt.Errorf("%s is on this computer or your home network: Paste links only reads the internet", u.Hostname())
+		}
 		return nil, fmt.Errorf("%s is on this computer or your home network, which the app can't reach through the VPN", u.Hostname())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -347,8 +346,13 @@ func localHost(host string) bool {
 		return true
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || sharedNet.Contains(ip))
 }
+
+// sharedNet: carrier-grade NAT addresses, which Tailscale uses for the
+// user's other devices (and this computer's own remote control).
+var sharedNet = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
 
 // addTorrentURL fetches a .torrent file through the VPN and adds it.
 func (a *App) addTorrentURL(url string, choice AddChoice) error {
@@ -393,6 +397,13 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 	if err != nil {
 		return
 	}
+	// A page's download is on the internet: never this computer or the home
+	// network (with No VPN, the app could otherwise be made to fetch from
+	// them), and only over the web. Fresh links for existing downloads too.
+	if u, err := url.Parse(link); err != nil || (u.Scheme != "http" && u.Scheme != "https") || localHost(u.Hostname()) {
+		a.notifyError(fmt.Errorf("%s: its download link isn't on the internet, so it wasn't downloaded", paste.WithoutFragments(page.URL)))
+		return
+	}
 	for _, s := range m.Specs() {
 		if s.Page == page.URL && (page.ID == "" || page.ID == s.ID) {
 			if !s.Done {
@@ -400,13 +411,6 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 			}
 			return
 		}
-	}
-	// A page's download is on the internet: never this computer or the home
-	// network (with No VPN, the app could otherwise be made to fetch from
-	// them), and only over the web.
-	if u, err := url.Parse(link); err != nil || (u.Scheme != "http" && u.Scheme != "https") || localHost(u.Hostname()) {
-		a.notifyError(fmt.Errorf("%s: its download link isn't on the internet, so it wasn't downloaded", paste.WithoutFragments(page.URL)))
-		return
 	}
 	name := ""
 	if _, params, err := mime.ParseMediaType(disposition); err == nil {

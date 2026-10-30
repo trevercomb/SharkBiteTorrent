@@ -94,8 +94,7 @@ func (a *App) directMode() bool {
 // Prowlarr/Jackett: through the VPN, or directly when "No VPN" is chosen.
 func (a *App) searchDial(ctx context.Context, network, addr string) (net.Conn, error) {
 	if a.directMode() {
-		d := net.Dialer{Resolver: &net.Resolver{}}
-		return d.DialContext(ctx, network, addr)
+		return a.direct.dial(ctx, network, addr, false)
 	}
 	return a.dialTunnel(ctx, network, addr)
 }

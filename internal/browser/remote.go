@@ -167,11 +167,15 @@ func (r *Remote) read(out *bufio.Reader, ready chan<- error) {
 			r.o.OnClosed()
 		}
 	}()
-	dec := json.NewDecoder(out)
-	for {
+	// One event per line. A line that isn't one is skipped: something in
+	// the helper (GTK, WebKit) printed to its standard output, which would
+	// otherwise end the stream and count the window as gone.
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
 		var e event
-		if err := dec.Decode(&e); err != nil {
-			return
+		if json.Unmarshal(sc.Bytes(), &e) != nil || e.Ev == "" {
+			continue
 		}
 		switch e.Ev {
 		case "ready":

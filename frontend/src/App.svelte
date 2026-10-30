@@ -314,7 +314,7 @@
 
   function dlStatus(d: main.DownloadStatus): string {
     if (removingNow.has(d.id)) return 'Removing…'
-    if (d.state === 'running') return d.offline ? 'Waiting for the VPN' : 'Downloading'
+    if (d.state === 'running') return d.waiting ? 'Waiting for its folder' : d.offline ? 'Waiting for the VPN' : 'Downloading'
     if (d.state === 'needsLink') return '⚠ Needs a new link'
     if (d.state === 'failed') return '⚠ Failed'
     if (d.state === 'done') {
@@ -330,7 +330,7 @@
 
   // The status cell's tooltip: the error, or what the scan found.
   function dlStatusTitle(d: main.DownloadStatus): string {
-    if (d.state !== 'done') return d.error
+    if (d.state !== 'done') return d.waiting || d.error
     switch (d.scan) {
       case 'clean': return `Scanned with ${d.scanEngine}: no known threats.`
       case 'threat': return `${d.scanEngine} found: ${d.threats.join(', ')}. Don't open it unless you're sure it's a false alarm.`
@@ -588,6 +588,8 @@
                 <td class="name" title={d.name}>
                   {#if d.scan === 'threat' || (d.scan === 'gone' && d.threats.length)}
                     <span class="flag threat" title="{d.scanEngine} found: {d.threats.join(', ')}">⚠</span>
+                  {:else if (d.warnings ?? []).length > 0}
+                    <span class="flag caution" title={(d.warnings ?? []).map(w => w.reason).join('\n')}>⚠</span>
                   {/if}
                   {d.name || 'Starting…'}
                 </td>

@@ -44,6 +44,9 @@ type Options struct {
 	// Speed limits in bytes/second; 0 means unlimited.
 	DownLimit int64
 	UpLimit   int64
+	// Down, if set, is the download limiter to use (see NewLimiter): the
+	// app shares it with its direct downloads, so the limit is for both.
+	Down *rate.Limiter
 	// StateDir holds the piece-completion database (the app data folder).
 	// Empty keeps completion in memory only (tests and tools).
 	StateDir string
@@ -110,7 +113,7 @@ func New(tun *tunnel.Tunnel, opts Options) (*Engine, error) {
 
 	e := &Engine{
 		tun:     tun,
-		down:    rate.NewLimiter(unlimited, 0),
+		down:    downLimiter(opts),
 		up:      rate.NewLimiter(unlimited, 0),
 		entries: map[metainfo.Hash]*entry{},
 	}
@@ -264,7 +267,7 @@ func newDirect(opts Options) (*Engine, error) {
 	dnsroute.UseSystem()
 
 	e := &Engine{
-		down:    rate.NewLimiter(unlimited, 0),
+		down:    downLimiter(opts),
 		up:      rate.NewLimiter(unlimited, 0),
 		entries: map[metainfo.Hash]*entry{},
 	}
@@ -379,6 +382,24 @@ func setLimit(l *rate.Limiter, n int64) {
 // connections when the download limiter reports no tokens, and an Inf limiter
 // never refills its token count from zero. A huge finite rate refills instantly.
 const unlimited = rate.Limit(1 << 40)
+
+// NewLimiter is a limiter for n bytes a second (0 = unlimited), set up as
+// the engine's own are; SetLimit changes it.
+func NewLimiter(n int64) *rate.Limiter {
+	l := rate.NewLimiter(unlimited, 0)
+	setLimit(l, n)
+	return l
+}
+
+// SetLimit sets l (from NewLimiter) to n bytes a second, 0 = unlimited.
+func SetLimit(l *rate.Limiter, n int64) { setLimit(l, n) }
+
+func downLimiter(o Options) *rate.Limiter {
+	if o.Down != nil {
+		return o.Down
+	}
+	return rate.NewLimiter(unlimited, 0)
+}
 
 func limitOf(n int64) rate.Limit {
 	if n <= 0 {
