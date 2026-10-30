@@ -35,7 +35,7 @@ func TestParseAndClassify(t *testing.T) {
 		"DNS lookup outside the tunnel (to 127.0.0.53:53): 1 packets",
 		"ICMP to 10.9.9.5: 1 packets",
 		"TCP to 10.9.9.3:443: 1 packets",
-		"UDP to 127.0.0.1:9 (a service on this computer other than your search server): 1 packets",
+		"UDP to 127.0.0.1:9 (a service on this computer other than your search server, from port 41440): 1 packets",
 	}
 	if !reflect.DeepEqual(list, want) {
 		t.Errorf("leaks:\n%q\nwant\n%q", list, want)
@@ -70,7 +70,7 @@ func TestClassifyLocalServices(t *testing.T) {
 		{proto: "tcp", src: "127.0.0.1", dst: "127.0.0.1", sport: 50003, dport: 8118, packets: 1},       // a local HTTP proxy
 	}
 	list, _, _, _ := classify(flows, p)
-	want := []string{"TCP to 127.0.0.1:8118 (a service on this computer other than your search server): 1 packets"}
+	want := []string{"TCP to 127.0.0.1:8118 (a service on this computer other than your search server, from port 50003): 1 packets"}
 	if !reflect.DeepEqual(list, want) {
 		t.Errorf("leaks %q, want %q", list, want)
 	}
