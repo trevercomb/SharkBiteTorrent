@@ -390,6 +390,7 @@ func (a *App) onSecondInstance(data options.SecondInstanceData) {
 type pendingSource struct {
 	src      string
 	external bool
+	choice   *AddChoice // where the user chose to save it, if asked
 }
 
 // handleArgs adds magnet links and .torrent files passed on the command line,
@@ -415,7 +416,7 @@ func (a *App) handleArgs(args []string, external bool) {
 		a.mu.Lock()
 		ready := a.eng != nil
 		if !ready {
-			a.pending = append(a.pending, pendingSource{arg, external})
+			a.pending = append(a.pending, pendingSource{src: arg, external: external})
 		}
 		a.mu.Unlock()
 		if ready {
@@ -699,6 +700,7 @@ func (a *App) connectDirect(set Settings) {
 		a.setVpn(VpnStatus{State: "error", Provider: "none", Name: "No VPN", Error: err.Error()})
 		return
 	}
+	a.direct.allow()
 	a.startEngine(nil, eng, VpnStatus{State: "off", Provider: "none", Name: "No VPN"})
 }
 
@@ -737,7 +739,13 @@ func (a *App) startEngine(tun *tunnel.Tunnel, eng *engine.Engine, st VpnStatus) 
 		}
 	}
 	for _, p := range pending {
-		if err := a.addSourceFrom(p.src, p.external); err != nil {
+		var err error
+		if p.choice != nil {
+			err = a.addSourceTo(p.src, false, *p.choice)
+		} else {
+			err = a.addSourceFrom(p.src, p.external)
+		}
+		if err != nil {
 			a.notifyError(err)
 		}
 	}
@@ -824,7 +832,10 @@ func (a *App) disconnect() {
 	a.eng, a.tun, a.stopMonitor = nil, nil, nil
 	a.mu.Unlock()
 	vpnprov.SetTunnel(nil)
-	a.direct.closeAll() // the mode may be changing: nothing stays on the normal connection
+	// The mode may be changing: nothing stays on the normal connection, and
+	// none is made while the engine shuts down (which takes seconds and
+	// still looks like "No VPN" until the next connection starts).
+	a.direct.closeAll()
 	if stop != nil {
 		stop()
 	}
@@ -834,6 +845,7 @@ func (a *App) disconnect() {
 	if tun != nil {
 		tun.Close()
 	}
+	a.direct.closeAll() // any that slipped in while shutting down
 }
 
 // monitor re-checks the exit IP every minute so the UI reflects reality.
@@ -1066,6 +1078,15 @@ func (a *App) addSourceTo(src string, external bool, choice AddChoice) error {
 		a.saved = append(a.saved, pending)
 		return a.writeSaved()
 	}
+	// Dropped or added while the VPN connects: added once it's up, where the
+	// user chose, as before they were asked.
+	a.mu.Lock()
+	if a.eng == nil {
+		a.pending = append(a.pending, pendingSource{src: src, choice: &choice})
+		a.mu.Unlock()
+		return nil
+	}
+	a.mu.Unlock()
 	eng, err := a.engine()
 	if err != nil {
 		return err

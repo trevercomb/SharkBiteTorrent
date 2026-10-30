@@ -71,6 +71,8 @@ func TestLocalHost(t *testing.T) {
 		"192.168.4.26": true, "10.0.0.5": true, "172.16.1.1": true, "fe80::1": true,
 		"100.101.102.103": true, "100.64.0.1": true, "224.0.0.251": true, // Tailscale/CGNAT, multicast
 		"100.128.0.1": false,
+		"fe80::1%en0": true, "fe80::1%12": true, "[fe80::1%en0]": true, "2606:4700::1111%en0": true, // zones: this computer's network
+		"::ffff:127.0.0.1": true, "::ffff:192.168.1.1": true, "::ffff:1.1.1.1": false,
 		"dl-cdn.alpinelinux.org": false, "1.1.1.1": false, "2606:4700::1111": false, "172.32.0.1": false,
 	} {
 		if got := localHost(host); got != want {

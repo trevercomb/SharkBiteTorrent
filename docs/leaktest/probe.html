@@ -48,6 +48,15 @@ add('img', { src: 'https://' + host('image') + '/x.png' }, 'an image');
 // A server that doesn't send its intermediate certificate: a certificate
 // checker may go online to fetch it (it mustn't, outside the VPN).
 add('img', { src: 'https://incomplete-chain.badssl.com/icons/favicon-green.ico' }, 'an image from a server with an incomplete certificate chain');
+// This computer and the home network: the window must never reach them
+// (the leak check fails on any connection there). localtest.me's name points at
+// 127.0.0.1; a .local name would be looked up with mDNS on the home network.
+add('img', { src: 'https://127.0.0.1/x.png' }, 'an image from this computer (127.0.0.1)');
+add('img', { src: 'https://[::1]/x.png' }, 'an image from this computer ([::1])');
+add('img', { src: 'https://192.168.0.1/x.png' }, 'an image from the home network (192.168.0.1)');
+add('img', { src: 'https://sbt-' + run + '-mdns.local/x.png' }, 'an image from a .local name (mDNS)');
+add('img', { src: 'https://localtest.me/x.png' }, 'an image from a name that points at this computer');
+fetch('https://127.0.0.1/').then(function () { note('fetch to this computer: answered'); }, function () { note('fetch to this computer: failed (fine)'); });
 var audio = document.createElement('audio');
 audio.preload = 'auto';
 audio.src = 'https://' + host('audio') + '/a.mp3';
@@ -65,6 +74,21 @@ try {
   var w = window.open('https://' + host('popup') + '/');
   note(w ? 'pop-up: window.open returned a window' : 'pop-up: blocked');
 } catch (e) { note('pop-up: refused (' + e.name + ')'); }
+
+// WebRTC from a fresh blank frame: a script that removes it from pages
+// may not have run there yet.
+(function () {
+  try {
+    var f = document.createElement('iframe');
+    document.body.appendChild(f);
+    var RTC = f.contentWindow && f.contentWindow.RTCPeerConnection;
+    if (!RTC) { note('WebRTC in a blank frame: not available (expected)'); return; }
+    var pc = new RTC({ iceServers: [{ urls: 'stun:' + host('stun-frame') + ':3478' }] });
+    pc.createDataChannel('x');
+    pc.onicecandidate = function (e) { if (e.candidate) note('WebRTC (blank frame) candidate: ' + e.candidate.candidate.split(' ').slice(4, 8).join(' ')); };
+    pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).then(function () { note('WebRTC in a blank frame: gathering candidates'); }, function (e) { note('WebRTC in a blank frame: refused (' + e.name + ')'); });
+  } catch (e) { note('WebRTC in a blank frame: refused (' + e.name + ')'); }
+})();
 
 // WebRTC: a STUN server's name is looked up (and UDP sent) outside any
 // proxy, and local candidates can be announced with mDNS on the home

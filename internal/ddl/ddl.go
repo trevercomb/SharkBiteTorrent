@@ -65,6 +65,10 @@ type Spec struct {
 	// FileID: the part file's identity from Manager.Identify when it was
 	// created; only that file is deleted with the download.
 	FileID string `json:"fileId,omitempty"`
+	// Validator is the file's strong ETag or Last-Modified from the server
+	// when the download started on this link: parts fetched later must be
+	// of the same file (If-Range), not a new one of the same size.
+	Validator string `json:"validator,omitempty"`
 	// Meta is the app's own data about the download (its malware scan),
 	// kept and saved with it but never looked at here.
 	Meta json.RawMessage `json:"meta,omitempty"`
@@ -163,7 +167,21 @@ func (m *Manager) Add(s Spec) error {
 		return errors.New("download needs an ID, a link and a folder")
 	}
 	defer m.changed() // saved right away, not only once it has made progress (after the unlock below)
-	m.mu.Lock()
+	if s.Size == 0 && len(s.Segments) == 0 {
+		s.Size = -1
+	}
+	j := &job{spec: s, state: Queued}
+	if s.Name != "" && !s.Done && len(s.Segments) == 0 {
+		// A name that's nothing once made safe ("..") leaves it to the server.
+		if n := SafeName(s.Name); n != "" {
+			j.spec.Name = m.unusedNameLock(j, s.Dir, n) // m.mu held from here
+		} else {
+			j.spec.Name = ""
+			m.mu.Lock()
+		}
+	} else {
+		m.mu.Lock()
+	}
 	defer m.mu.Unlock()
 	if m.jobs == nil {
 		m.jobs = map[string]*job{}
@@ -171,10 +189,6 @@ func (m *Manager) Add(s Spec) error {
 	if _, dup := m.jobs[s.ID]; dup {
 		return fmt.Errorf("download %s already exists", s.ID)
 	}
-	if s.Size == 0 && len(s.Segments) == 0 {
-		s.Size = -1
-	}
-	j := &job{spec: s, state: Queued}
 	switch {
 	case s.Done:
 		j.state = Done
@@ -184,14 +198,6 @@ func (m *Manager) Add(s Spec) error {
 		j.state = Paused
 	case s.Error != "":
 		j.state = Failed
-	}
-	if s.Name != "" && !s.Done && len(s.Segments) == 0 {
-		// A name that's nothing once made safe ("..") leaves it to the server.
-		if n := SafeName(s.Name); n != "" {
-			j.spec.Name = m.unusedNameLocked(j, n)
-		} else {
-			j.spec.Name = ""
-		}
 	}
 	m.jobs[s.ID] = j
 	m.ord = append(m.ord, s.ID)
@@ -260,6 +266,9 @@ func (m *Manager) SetURL(id, url string) {
 	}
 	done := m.stopLocked(j)
 	j.spec.URL = url
+	// Another server may tag the same file differently: the new link's
+	// version is recorded at its first request (the size is still checked).
+	j.spec.Validator = ""
 	m.mu.Unlock()
 	if done != nil {
 		<-done
@@ -326,14 +335,26 @@ func (m *Manager) Remove(id string, deleteFile bool) error {
 		return err
 	}
 	defer root.Close()
-	// Only the file it created: not another one put there since (saved by a
-	// version that didn't record identities: by name, as then).
-	if spec.FileID != "" && m.SameFile != nil {
-		if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
+	// Only the file it created: not another one put there since.
+	st, err := root.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case spec.FileID != "" && m.SameFile != nil:
 		if !m.SameFile(spec.FileID, filepath.Join(spec.Dir, name)) {
 			return fmt.Errorf("not deleting %s: it isn't the file this download created", spec.Name)
+		}
+	case spec.Done:
+		// No identity recorded (a drive that has none, FAT or exFAT): a
+		// finished file is deleted only if it still looks like the one
+		// downloaded, a plain file of its size; a different file the user
+		// put there under that name is left alone.
+		if !st.Mode().IsRegular() || spec.Size >= 0 && st.Size() != spec.Size {
+			return fmt.Errorf("not deleting %s: it may not be the file this download created (delete it yourself if it is)", spec.Name)
 		}
 	}
 	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -569,7 +590,7 @@ func (m *Manager) syncProgress(j *job, f *os.File) {
 	}
 }
 
-func (m *Manager) request(ctx context.Context, url string, from, to int64) (*http.Response, error) {
+func (m *Manager) request(ctx context.Context, url string, from, to int64, ifRange string) (*http.Response, error) {
 	hc, err := m.Client()
 	if err != nil {
 		return nil, fmt.Errorf("%w (%v)", ErrOffline, err)
@@ -585,6 +606,9 @@ func (m *Manager) request(ctx context.Context, url string, from, to int64) (*htt
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", from, to-1))
 	} else if from > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
+	}
+	if ifRange != "" && req.Header.Get("Range") != "" {
+		req.Header.Set("If-Range", ifRange) // a changed file comes whole (200), not as a part
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
@@ -620,7 +644,7 @@ func (m *Manager) probe(ctx context.Context, j *job) error {
 	m.mu.Lock()
 	url := j.spec.URL
 	m.mu.Unlock()
-	resp, err := m.retry(ctx, j, func() (*http.Response, error) { return m.request(ctx, url, 0, 1) })
+	resp, err := m.retry(ctx, j, func() (*http.Response, error) { return m.request(ctx, url, 0, 1, "") })
 	if err != nil {
 		return err
 	}
@@ -634,18 +658,33 @@ func (m *Manager) probe(ctx context.Context, j *job) error {
 		size = resp.ContentLength
 	}
 
+	v := validator(resp)
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if j.spec.Name == "" {
-		j.spec.Name = m.unusedNameLocked(j, fileName(resp))
+	needName, dir := j.spec.Name == "", j.spec.Dir
+	m.mu.Unlock()
+	if needName {
+		name := m.unusedNameLock(j, dir, fileName(resp)) // m.mu held from here
+		if j.spec.Name == "" {
+			j.spec.Name = name
+		}
+	} else {
+		m.mu.Lock()
 	}
+	defer m.mu.Unlock()
 	if len(j.spec.Segments) > 0 {
 		if j.spec.Size >= 0 && size >= 0 && size != j.spec.Size {
-			return errors.New("the file on the server isn't the one this download started with (size changed)")
+			return errChanged("size changed")
+		}
+		if j.spec.Validator != "" && v != "" && v != j.spec.Validator {
+			return errChanged("its version changed")
+		}
+		if j.spec.Validator == "" {
+			j.spec.Validator = v // a fresh link: its version from now on
 		}
 		return nil
 	}
-	j.spec.Size, j.spec.Ranges = size, ranges
+	j.spec.Size, j.spec.Ranges, j.spec.Validator = size, ranges, v
 	n := m.Connections
 	if n <= 0 {
 		n = 4
@@ -699,7 +738,7 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 	failures := 0
 	for {
 		m.mu.Lock()
-		seg, pos, url, ranges := j.spec.Segments[i], j.pos[i], j.spec.URL, j.spec.Ranges
+		seg, pos, url, ranges, v := j.spec.Segments[i], j.pos[i], j.spec.URL, j.spec.Ranges, j.spec.Validator
 		m.mu.Unlock()
 		if seg.End >= 0 && pos >= seg.End {
 			return nil
@@ -720,7 +759,7 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 		reqCtx, cancelReq := context.WithCancel(ctx)
 		var stalled atomic.Bool
 		stall := time.AfterFunc(stallTimeout, func() { stalled.Store(true); cancelReq() })
-		resp, err := m.request(reqCtx, url, pos, seg.End)
+		resp, err := m.request(reqCtx, url, pos, seg.End, v)
 		if errors.Is(err, ErrOffline) {
 			stall.Stop()
 			cancelReq()
@@ -742,7 +781,7 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 		switch {
 		case err == nil:
 			return nil
-		case errors.Is(err, ErrLinkExpired), ctx.Err() != nil:
+		case errors.Is(err, ErrLinkExpired), errors.Is(err, ErrFileChanged), ctx.Err() != nil:
 			return err
 		}
 		m.mu.Lock()
@@ -765,12 +804,26 @@ func (m *Manager) fetchSegment(ctx context.Context, j *job, f *os.File, i int) e
 func (m *Manager) copySegment(ctx context.Context, j *job, f *os.File, i int, resp *http.Response, pos, end int64, buf []byte, stall *time.Timer) error {
 	if pos > 0 || end >= 0 {
 		if resp.StatusCode != http.StatusPartialContent {
+			if pos > 0 && resp.Request.Header.Get("If-Range") != "" {
+				return errChanged("its version changed") // If-Range: the whole new file came
+			}
 			if pos > 0 {
 				return errors.New("the server stopped accepting byte ranges")
 			}
 		} else if start, _, ok := contentRange(resp.Header.Get("Content-Range")); !ok || start != pos {
 			return errors.New("the server sent the wrong part of the file")
 		}
+	}
+	if v := validator(resp); v != "" {
+		m.mu.Lock()
+		switch {
+		case j.spec.Validator == "":
+			j.spec.Validator = v // a fresh link's first answer: its version
+		case v != j.spec.Validator:
+			m.mu.Unlock()
+			return errChanged("its version changed")
+		}
+		m.mu.Unlock()
 	}
 	for {
 		want := len(buf)
@@ -844,6 +897,25 @@ func waitN(ctx context.Context, l *rate.Limiter, n int) error {
 		n -= k
 	}
 	return nil
+}
+
+// errChanged: the server's file isn't the one this download started with.
+// Parts of two files would make neither, so the download stops (Failed).
+func errChanged(why string) error {
+	return fmt.Errorf("%w (%s)", ErrFileChanged, why)
+}
+
+// ErrFileChanged means the server's file was replaced since the download
+// started: removing it and downloading it again gets the new one.
+var ErrFileChanged = errors.New("the file on the server isn't the one this download started with")
+
+// validator is the file's strong ETag, or its Last-Modified ("" if the
+// server sends neither): what If-Range checks.
+func validator(resp *http.Response) string {
+	if e := resp.Header.Get("ETag"); e != "" && !strings.HasPrefix(e, "W/") {
+		return e
+	}
+	return resp.Header.Get("Last-Modified")
 }
 
 // contentRange parses "bytes start-end/total".
@@ -922,23 +994,46 @@ func SafeName(n string) string {
 	return n
 }
 
-// unusedNameLocked returns name, or "name (2).ext" etc., so that no other
+// unusedNameLock returns name, or "name (2).ext" etc., so that no other
 // unfinished download in the same folder has it (they'd share a part file)
 // and no file by that name (or its part file) is already there.
-func (m *Manager) unusedNameLocked(j *job, name string) string {
-	root, err := os.OpenRoot(j.spec.Dir)
-	if err == nil {
-		defer root.Close()
-	}
-	taken := func(n string) bool {
+//
+// It's called without m.mu and returns holding it, with the name free of
+// the other downloads' then: the drive is looked at without the lock (a
+// network drive that hangs would otherwise freeze every call that takes
+// it, the list's included), so another download may take the name in the
+// meantime, and then it's picked again.
+func (m *Manager) unusedNameLock(j *job, dir, name string) string {
+	inUse := func(n string) bool { // under m.mu
 		for _, o := range m.jobs {
-			if o != j && !o.spec.Done && o.spec.Dir == j.spec.Dir && strings.EqualFold(o.spec.Name, n) {
+			if o != j && !o.spec.Done && o.spec.Dir == dir && strings.EqualFold(o.spec.Name, n) {
 				return true
 			}
 		}
-		return root != nil && (!nameFree(root, n+PartSuffix) || !nameFree(root, n))
+		return false
 	}
-	return numbered(name, taken)
+	for {
+		m.mu.Lock()
+		others := map[string]bool{}
+		for _, o := range m.jobs {
+			if o != j && !o.spec.Done && o.spec.Dir == dir {
+				others[strings.ToLower(o.spec.Name)] = true
+			}
+		}
+		m.mu.Unlock()
+		root, err := os.OpenRoot(dir)
+		n := numbered(name, func(n string) bool {
+			return others[strings.ToLower(n)] || err == nil && (!nameFree(root, n+PartSuffix) || !nameFree(root, n))
+		})
+		if err == nil {
+			root.Close()
+		}
+		m.mu.Lock()
+		if !inUse(n) {
+			return n
+		}
+		m.mu.Unlock()
+	}
 }
 
 // freeName returns name, or "name (2).ext" etc. if a file by that name exists.

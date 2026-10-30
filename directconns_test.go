@@ -27,6 +27,10 @@ func TestDirectConnsCloseAll(t *testing.T) {
 
 	var s directConns
 	ctx := context.Background()
+	if _, err := s.dial(ctx, "tcp", ln.Addr().String(), false); err != errModeChanged {
+		t.Fatalf("before No VPN is up: %v, want refused", err)
+	}
+	s.allow()
 	a, err := s.dial(ctx, "tcp", ln.Addr().String(), false)
 	if err != nil {
 		t.Fatal(err)
@@ -45,6 +49,15 @@ func TestDirectConnsCloseAll(t *testing.T) {
 	if _, err := a.Read(make([]byte, 1)); err == nil || isTimeout(err) {
 		t.Errorf("read after closeAll: %v, want closed", err)
 	}
+	// While the mode changes (the engine shutting down), nothing new: a
+	// caller that had just decided on a direct connection gets refused.
+	if c, err := s.dial(ctx, "tcp", ln.Addr().String(), false); err != errModeChanged {
+		if c != nil {
+			c.Close()
+		}
+		t.Errorf("after closeAll: %v, want refused", err)
+	}
+	s.allow()
 	if _, err := s.dial(ctx, "tcp", ln.Addr().String(), true); err == nil {
 		t.Error("guardLocal dialed 127.0.0.1")
 	}

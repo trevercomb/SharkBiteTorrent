@@ -18,6 +18,7 @@ import (
 type directConns struct {
 	mu    sync.Mutex
 	gen   uint64 // counts closeAll calls: a dial that spans one is refused
+	open  bool   // No VPN is running: set once it is, cleared by closeAll
 	conns map[*directConn]struct{}
 }
 
@@ -28,8 +29,14 @@ var errModeChanged = errors.New("the VPN setting changed while connecting")
 // there included).
 func (s *directConns) dial(ctx context.Context, network, addr string, guardLocal bool) (net.Conn, error) {
 	s.mu.Lock()
-	gen := s.gen
+	gen, open := s.gen, s.open
 	s.mu.Unlock()
+	// A caller that decided on a direct connection just before the mode
+	// started changing gets nothing, rather than a connection that would
+	// outlive the change.
+	if !open {
+		return nil, errModeChanged
+	}
 	d := net.Dialer{Timeout: 30 * time.Second, Resolver: &net.Resolver{}}
 	if guardLocal {
 		d.Control = func(_, address string, _ syscall.RawConn) error {
@@ -45,7 +52,7 @@ func (s *directConns) dial(ctx context.Context, network, addr string, guardLocal
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.gen != gen {
+	if s.gen != gen || !s.open {
 		c.Close()
 		return nil, errModeChanged
 	}
@@ -57,10 +64,19 @@ func (s *directConns) dial(ctx context.Context, network, addr string, guardLocal
 	return dc, nil
 }
 
-// closeAll closes every direct connection, and any being made now.
+// allow lets direct connections be made: "No VPN" is up.
+func (s *directConns) allow() {
+	s.mu.Lock()
+	s.open = true
+	s.mu.Unlock()
+}
+
+// closeAll closes every direct connection, and any being made now, and
+// refuses new ones until allow.
 func (s *directConns) closeAll() {
 	s.mu.Lock()
 	s.gen++
+	s.open = false
 	conns := s.conns
 	s.conns = nil
 	s.mu.Unlock()

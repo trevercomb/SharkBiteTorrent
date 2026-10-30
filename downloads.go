@@ -11,8 +11,10 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -141,7 +143,15 @@ func (a *App) downloadClient() (*http.Client, error) {
 		if d.clientTun != tun { // a new tunnel (reconnected): connections to the old one are dead
 			d.clientTun = tun
 			d.client = &http.Client{Transport: &http.Transport{
-				DialContext:           tun.DialContext,
+				// The internet only, as without the VPN: a private address
+				// (from a link or a redirect) would reach the VPN provider's
+				// own network, which is no business of a download.
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					if h, _, err := net.SplitHostPort(addr); err != nil || localHost(h) {
+						return nil, fmt.Errorf("%s isn't on the internet", addr)
+					}
+					return tun.DialContext(ctx, network, addr)
+				},
 				TLSHandshakeTimeout:   30 * time.Second,
 				ResponseHeaderTimeout: 60 * time.Second,
 				MaxIdleConnsPerHost:   8,
@@ -354,9 +364,18 @@ func localHost(host string) bool {
 	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
 		return true
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
-		ip.IsMulticast() || sharedNet.Contains(ip))
+	// An address with a zone (fe80::1%en0) names a network interface: only
+	// ever this computer's own network. net.ParseIP doesn't take zones.
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		return false
+	}
+	if addr.Zone() != "" {
+		return true
+	}
+	ip := net.IP(addr.Unmap().AsSlice())
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || sharedNet.Contains(ip)
 }
 
 // sharedNet: carrier-grade NAT addresses, which Tailscale uses for the
@@ -429,7 +448,27 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 	if dir == "" {
 		dir = a.dirFor(AddChoice{})
 	}
-	if err := m.Add(ddl.Spec{ID: newDownloadID(), URL: link, Page: page.URL, Dir: dir, Name: name, Paused: page.Paused}); err != nil {
+	// Whatever the page started is taken (an ad or a frame on it can start
+	// one too): one named like a disguised program (a video that's really
+	// a program, a double extension) waits, paused, for the user to look,
+	// as a torrent with such files does, before any of it is downloaded.
+	paused := page.Paused
+	shown := name
+	if shown == "" {
+		if u, err := url.Parse(link); err == nil {
+			shown, _ = url.PathUnescape(path.Base(u.Path))
+		}
+	}
+	if reason := nameWarning(shown); reason != "" {
+		paused = true
+		host := ""
+		if u, err := url.Parse(link); err == nil {
+			host = " (from " + u.Hostname() + ")"
+		}
+		a.notifyError(fmt.Errorf("%s%s, from the page %s, was added paused: %s. Resume it only if it's what you meant to download",
+			ddl.SafeName(shown), host, paste.WithoutFragments(page.URL), reason))
+	}
+	if err := m.Add(ddl.Spec{ID: newDownloadID(), URL: link, Page: page.URL, Dir: dir, Name: name, Paused: paused}); err != nil {
 		a.notifyError(err)
 	}
 }
@@ -522,4 +561,16 @@ func (a *App) OpenDownloadFolder(id string) error {
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// nameWarning is why a download's name looks like a disguised program
+// ("" if it doesn't), as torrents' file names are checked.
+func nameWarning(name string) string {
+	if name == "" {
+		return ""
+	}
+	if w := scan.Inspect([]scan.File{{Path: name, Size: 1}}); len(w) > 0 {
+		return w[0].Reason
+	}
+	return ""
 }

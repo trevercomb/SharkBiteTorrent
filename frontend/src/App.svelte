@@ -118,16 +118,27 @@
 
   // Where to save what's being added. With "Ask where to save each
   // download" on, the dialog asks (null: cancelled); otherwise the default.
-  let asking = $state<{ what: string; resolve: (c: main.AddChoice | null) => void } | null>(null)
+  // Questions asked while one is showing (a dropped file while Paste links
+  // asks) wait their turn rather than replacing it, which lost an add.
+  type Ask = { what: string; resolve: (c: main.AddChoice | null) => void }
+  let asking = $state<Ask | null>(null)
+  const askQueue: Ask[] = []
   function askChoice(what: string): Promise<main.AddChoice | null> {
     if (!settings?.askSaveLocation) return Promise.resolve({ dir: '', paused: false } as main.AddChoice)
-    return new Promise(resolve => (asking = { what, resolve }))
+    return new Promise(resolve => {
+      if (asking) askQueue.push({ what, resolve })
+      else asking = { what, resolve }
+    })
   }
-  function answer(c: main.AddChoice | null) {
+  async function answer(c: main.AddChoice | null) {
     const a = asking!
     asking = null
     a.resolve(c)
-    loadSettings() // recent folders, or "don't ask again"
+    await loadSettings() // recent folders, or "don't ask again"
+    const next = askQueue.shift()
+    if (!next) return
+    if (settings?.askSaveLocation) asking = next
+    else next.resolve({ dir: '', paused: false } as main.AddChoice) // "don't ask again" was ticked
   }
 
   const magnetName = (link: string) =>

@@ -35,4 +35,10 @@ func TestFromThisApp(t *testing.T) {
 	if !descendsFrom(os.Getpid(), os.Getpid()) {
 		t.Error("we don't count as ours")
 	}
+	if !isWindowProgram(os.Getpid()) {
+		t.Error("our own program isn't one the window runs")
+	}
+	if isWindowProgram(1) {
+		t.Error("init runs a window program")
+	}
 }

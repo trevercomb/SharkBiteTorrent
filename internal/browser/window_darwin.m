@@ -147,6 +147,7 @@ static void activate(void) {
 static NSString *const blockRules = @"["
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://[^/]*\\\\.localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://[^/]*\\\\.local[:/]\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://127\\\\.\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://0\\\\.\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://10\\\\.\"},\"action\":{\"type\":\"block\"}},"

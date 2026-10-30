@@ -29,7 +29,9 @@ func GuardProxy(s *socks.Server, o *Options) {
 }
 
 // FromThisApp reports whether the other end of c, a connection accepted on
-// 127.0.0.1, belongs to this process or one it started (directly or not).
+// 127.0.0.1, belongs to this process or one it started (directly or not)
+// that is the app itself or WebKit's network process: not any program the
+// app started (a browser opened for a link, say).
 func FromThisApp(c net.Conn) bool {
 	local, ok1 := c.LocalAddr().(*net.TCPAddr)
 	remote, ok2 := c.RemoteAddr().(*net.TCPAddr)
@@ -42,14 +44,36 @@ func FromThisApp(c net.Conn) bool {
 		return false
 	}
 	pid := ownerOf(inode)
-	return pid > 0 && descendsFrom(pid, os.Getpid())
+	if pid <= 0 || !descendsFrom(pid, os.Getpid()) {
+		return false
+	}
+	return pid == os.Getpid() || isWindowProgram(pid)
+}
+
+// isWindowProgram reports whether pid runs the app's own program (the
+// window's process) or WebKitGTK's network process, which makes the
+// window's connections.
+func isWindowProgram(pid int) bool {
+	exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return false
+	}
+	// A program replaced while running (an update) reads "... (deleted)".
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	if filepath.Base(exe) == "WebKitNetworkProcess" {
+		return true
+	}
+	me, err := os.Executable()
+	return err == nil && exe == strings.TrimSuffix(me, " (deleted)")
 }
 
 // socketInode finds, in /proc/net/tcp (and tcp6), the socket from
 // 127.0.0.1:from to 127.0.0.1:to.
 func socketInode(from, to int) string {
-	want := fmt.Sprintf(":%04X", from)
-	peer := fmt.Sprintf(":%04X", to)
+	// 127.0.0.1 both ends (IPv4-mapped in tcp6 ends the same way), not
+	// just the ports.
+	want := fmt.Sprintf("0100007F:%04X", from)
+	peer := fmt.Sprintf("0100007F:%04X", to)
 	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
 		f, err := os.Open(table)
 		if err != nil {

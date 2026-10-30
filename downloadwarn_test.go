@@ -21,3 +21,15 @@ func TestDownloadNameWarnings(t *testing.T) {
 		}
 	}
 }
+
+// A page's download named like a disguised program is added paused.
+func TestNameWarning(t *testing.T) {
+	for name, flagged := range map[string]bool{
+		"Movie.2026.1080p.mp4.exe": true, "invoice.pdf.scr": true,
+		"debian-13.7.0-amd64-netinst.iso": false, "vlc-3.0.24-win64.exe": false, "": false,
+	} {
+		if got := nameWarning(name) != ""; got != flagged {
+			t.Errorf("%q: flagged %v, want %v", name, got, flagged)
+		}
+	}
+}
