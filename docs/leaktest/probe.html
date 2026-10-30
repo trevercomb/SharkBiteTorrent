@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shark BiteTorrent leak test page</title>
+<script>
+// Each run uses names nobody has looked up before (no cache can hide a
+// lookup). They don't exist: what matters is only where they're looked up.
+// The leak check fails on any lookup or connection outside the VPN.
+var run = Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('');
+function host(what) { return 'sbt-' + run + '-' + what + '.example.com'; }
+// Hints read as the page is parsed: DNS prefetch and preconnect.
+document.write('<link rel="dns-prefetch" href="//' + host('prefetch') + '">');
+document.write('<link rel="preconnect" href="https://' + host('preconnect') + '">');
+</script>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 40em; margin: 2em auto; padding: 0 16px; color: #1b1f24; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #e6e8eb; background: #16181c; } a { color: #8ab4f8; } }
+  iframe, img, audio { width: 1px; height: 1px; border: 0; opacity: 0; }
+  #download { display: none; }
+</style>
+</head>
+<body>
+<h1>Leak test page</h1>
+<p>Run <code id="run"></code>. Each line is something tried. Blocked ones are expected: what counts is that the leak check finds nothing outside the VPN.</p>
+<ul id="log"></ul>
+<p><a id="link" href="#">A link</a> (browsers may look its name up early).</p>
+<p><a id="download" href="sbt-leaktest.bin" download>Download test file</a></p>
+<script>
+var log = document.getElementById('log');
+function note(s) { var li = document.createElement('li'); li.textContent = s; log.appendChild(li); }
+document.getElementById('run').textContent = run;
+note('DNS prefetch and preconnect hints: ' + host('prefetch') + ', ' + host('preconnect'));
+
+document.getElementById('link').href = 'https://' + host('link') + '/';
+note('a link to ' + host('link'));
+
+function add(tag, attrs, what) {
+  var e = document.createElement(tag);
+  for (var k in attrs) e.setAttribute(k, attrs[k]);
+  e.addEventListener('error', function () { note(what + ': failed to load (fine)'); });
+  e.addEventListener('load', function () { note(what + ': loaded'); });
+  document.body.appendChild(e);
+}
+add('iframe', { src: 'https://' + host('iframe') + '/' }, 'an iframe');
+add('img', { src: 'https://' + host('image') + '/x.png' }, 'an image');
+// A server that doesn't send its intermediate certificate: a certificate
+// checker may go online to fetch it (it mustn't, outside the VPN).
+add('img', { src: 'https://incomplete-chain.badssl.com/icons/favicon-green.ico' }, 'an image from a server with an incomplete certificate chain');
+var audio = document.createElement('audio');
+audio.preload = 'auto';
+audio.src = 'https://' + host('audio') + '/a.mp3';
+audio.addEventListener('error', function () { note('audio: failed to load (fine)'); });
+document.body.appendChild(audio);
+note('audio from ' + host('audio'));
+
+fetch('https://' + host('fetch') + '/').then(function () { note('fetch: answered'); }, function () { note('fetch: failed (fine)'); });
+try {
+  var ws = new WebSocket('wss://' + host('websocket') + '/');
+  ws.onerror = function () { note('WebSocket: failed (fine)'); };
+} catch (e) { note('WebSocket: refused (' + e.name + ')'); }
+
+try {
+  var w = window.open('https://' + host('popup') + '/');
+  note(w ? 'pop-up: window.open returned a window' : 'pop-up: blocked');
+} catch (e) { note('pop-up: refused (' + e.name + ')'); }
+
+// WebRTC: a STUN server's name is looked up (and UDP sent) outside any
+// proxy, and local candidates can be announced with mDNS on the home
+// network. It should be off.
+if (typeof RTCPeerConnection === 'undefined') {
+  note('WebRTC: not available (expected)');
+} else {
+  try {
+    var pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:' + host('stun') + ':3478' }, { urls: 'stun:stun.l.google.com:19302' }] });
+    pc.createDataChannel('x');
+    pc.onicecandidate = function (e) { if (e.candidate) note('WebRTC candidate: ' + e.candidate.candidate.split(' ').slice(4, 8).join(' ')); };
+    pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).then(function () { note('WebRTC: gathering candidates'); }, function (e) { note('WebRTC: refused (' + e.name + ')'); });
+  } catch (e) { note('WebRTC: refused (' + e.name + ')'); }
+}
+
+// Give everything time to go out, then offer the download (the window
+// clicks it; the file arriving in the app shows this page ran).
+setTimeout(function () {
+  note('done: the test file can be downloaded');
+  document.getElementById('download').style.display = 'inline';
+}, 6000);
+</script>
+</body>
+</html>
