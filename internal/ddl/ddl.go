@@ -314,21 +314,29 @@ func (m *Manager) Remove(id string, deleteFile bool) error {
 	if !plainName(spec.Name) {
 		return fmt.Errorf("not deleting %q: not a plain file name", spec.Name)
 	}
-	p := partPath(spec)
+	name := spec.Name + PartSuffix
 	if spec.Done {
-		p = filepath.Join(spec.Dir, spec.Name)
+		name = spec.Name
 	}
+	root, err := os.OpenRoot(spec.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	// Only the file it created: not another one put there since (saved by a
 	// version that didn't record identities: by name, as then).
 	if spec.FileID != "" && m.SameFile != nil {
-		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+		if _, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		if !m.SameFile(spec.FileID, p) {
+		if !m.SameFile(spec.FileID, filepath.Join(spec.Dir, name)) {
 			return fmt.Errorf("not deleting %s: it isn't the file this download created", spec.Name)
 		}
 	}
-	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -459,7 +467,7 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 	if err := m.waitForFolder(ctx, j, spec.Dir); err != nil {
 		return err
 	}
-	f, created, err := openPart(partPath(spec))
+	f, created, err := openPart(spec.Dir, spec.Name+PartSuffix)
 	if err != nil {
 		return err
 	}
@@ -516,21 +524,21 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 		}
 		return firstErr
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
 	m.mu.Lock()
 	spec = j.spec
 	m.mu.Unlock()
 	if spec.Size >= 0 {
-		if st, err := os.Stat(partPath(spec)); err != nil || st.Size() != spec.Size {
+		if st, err := f.Stat(); err != nil || st.Size() != spec.Size {
 			return errors.New("the downloaded file has the wrong size")
 		}
+	}
+	if err := f.Close(); err != nil {
+		return err
 	}
 	if m.Finishing != nil {
 		m.Finishing(partPath(spec))
 	}
-	final, err := takeName(partPath(spec), spec.Dir, spec.Name)
+	final, err := takeName(spec.Dir, spec.Name+PartSuffix, spec.Name)
 	if err != nil {
 		return err
 	}
@@ -918,26 +926,32 @@ func SafeName(n string) string {
 // unfinished download in the same folder has it (they'd share a part file)
 // and no file by that name (or its part file) is already there.
 func (m *Manager) unusedNameLocked(j *job, name string) string {
+	root, err := os.OpenRoot(j.spec.Dir)
+	if err == nil {
+		defer root.Close()
+	}
 	taken := func(n string) bool {
 		for _, o := range m.jobs {
 			if o != j && !o.spec.Done && o.spec.Dir == j.spec.Dir && strings.EqualFold(o.spec.Name, n) {
 				return true
 			}
 		}
-		_, err := os.Lstat(filepath.Join(j.spec.Dir, n+PartSuffix))
-		return !errors.Is(err, os.ErrNotExist) || !nameFree(j.spec.Dir, n)
+		return root != nil && (!nameFree(root, n+PartSuffix) || !nameFree(root, n))
 	}
 	return numbered(name, taken)
 }
 
 // freeName returns name, or "name (2).ext" etc. if a file by that name exists.
-func freeName(dir, name string) string {
-	return numbered(name, func(n string) bool { return !nameFree(dir, n) })
+func freeName(root *os.Root, name string) string {
+	return numbered(name, func(n string) bool { return !nameFree(root, n) })
 }
 
-func nameFree(dir, name string) bool {
-	_, err := os.Lstat(filepath.Join(dir, name))
-	return errors.Is(err, os.ErrNotExist)
+// nameFree is false only if something is there: a name that can't be looked
+// at (no permission, outside the folder) counts as free, so creating the
+// file fails and says why, not "name (2)", "name (3)"... forever.
+func nameFree(root *os.Root, name string) bool {
+	_, err := root.Lstat(name)
+	return err != nil
 }
 
 func numbered(name string, taken func(string) bool) string {
@@ -985,48 +999,63 @@ func (m *Manager) waitForFolder(ctx context.Context, j *job, dir string) error {
 	}
 }
 
-// openPart opens a download's part file: created new (never through
+// The download's files are only ever touched through its folder opened as
+// an os.Root: nothing done through it can reach outside the folder, by a
+// name with ".." in it or by a link pointing elsewhere.
+
+// openPart opens a download's part file in dir: created new (never through
 // something already there), or the existing one only if it's a plain file
-// and still the same file once open (not a link put in its place).
-func openPart(p string) (f *os.File, created bool, err error) {
-	st, err := os.Lstat(p)
+// and still the same file once open (not a link put in its place, which
+// os.Root would follow if it pointed to another file in the folder).
+func openPart(dir, name string) (f *os.File, created bool, err error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	defer root.Close()
+	st, err := root.Lstat(name)
 	if errors.Is(err, os.ErrNotExist) {
-		f, err = os.OpenFile(p, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
+		f, err = root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o644)
 		return f, err == nil, err
 	}
 	if err != nil {
 		return nil, false, err
 	}
 	if !st.Mode().IsRegular() {
-		return nil, false, fmt.Errorf("%s isn't a plain file", filepath.Base(p))
+		return nil, false, fmt.Errorf("%s isn't a plain file", name)
 	}
-	f, err = os.OpenFile(p, os.O_RDWR, 0)
+	f, err = root.OpenFile(name, os.O_RDWR, 0)
 	if err != nil {
 		return nil, false, err
 	}
 	if fst, err := f.Stat(); err != nil || !os.SameFile(st, fst) {
 		f.Close()
-		return nil, false, fmt.Errorf("%s changed while being opened", filepath.Base(p))
+		return nil, false, fmt.Errorf("%s changed while being opened", name)
 	}
 	return f, false, nil
 }
 
-// takeName gives the finished part file its name, or "name (2).ext" etc.,
-// never replacing a file: a hard link fails if the name was taken in the
-// meantime. Where hard links aren't supported (some network shares, FAT),
-// it's renamed into a name that was free a moment ago.
-func takeName(part, dir, name string) (string, error) {
+// takeName gives the finished part file in dir its name, or "name (2).ext"
+// etc., never replacing a file: a hard link fails if the name was taken in
+// the meantime. Where hard links aren't supported (some network shares,
+// FAT), it's renamed into a name that was free a moment ago.
+func takeName(dir, part, name string) (string, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 	for range 100 {
-		final := freeName(dir, name)
-		err := os.Link(part, filepath.Join(dir, final))
+		final := freeName(root, name)
+		err := root.Link(part, final)
 		if err == nil {
-			os.Remove(part)
+			root.Remove(part)
 			return final, nil
 		}
 		if errors.Is(err, os.ErrExist) {
 			continue // taken just now: the next free name
 		}
-		return final, os.Rename(part, filepath.Join(dir, final))
+		return final, root.Rename(part, final)
 	}
 	return "", fmt.Errorf("no free name for %s", name)
 }

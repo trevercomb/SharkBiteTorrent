@@ -54,7 +54,7 @@ func TestTakeNameKeepsExisting(t *testing.T) {
 	part := filepath.Join(dir, "a.bin"+PartSuffix)
 	os.WriteFile(part, []byte("new"), 0o644)
 	os.WriteFile(filepath.Join(dir, "a.bin"), []byte("old"), 0o644)
-	got, err := takeName(part, dir, "a.bin")
+	got, err := takeName(dir, "a.bin"+PartSuffix, "a.bin")
 	if err != nil || got != "a (2).bin" {
 		t.Fatalf("takeName = %q, %v", got, err)
 	}
@@ -107,11 +107,47 @@ func TestOpenPartRefusesLink(t *testing.T) {
 	if err := os.Symlink(target, part); err != nil {
 		t.Skipf("can't make a symlink here: %v", err)
 	}
-	if f, _, err := openPart(part); err == nil {
+	if f, _, err := openPart(dir, "x"+PartSuffix); err == nil {
 		f.Close()
 		t.Fatal("opened a symlink as the part file")
 	}
 	checkFile(t, target, []byte("keep"))
+}
+
+// Nothing reaches outside the download's folder, even a name that got past
+// plainName, or a link in the folder pointing out of it.
+func TestStaysInFolder(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "downloads")
+	os.Mkdir(dir, 0o755)
+	if f, _, err := openPart(dir, filepath.Join("..", "escaped"+PartSuffix)); err == nil {
+		f.Close()
+		t.Error("created a part file outside the folder")
+	}
+	if _, err := os.Stat(filepath.Join(base, "escaped"+PartSuffix)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a file appeared outside the folder: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(dir, "a.bin"+PartSuffix), []byte("new"), 0o644)
+	if _, err := takeName(dir, "a.bin"+PartSuffix, filepath.Join("..", "a.bin")); err == nil {
+		t.Error("named the finished file outside the folder")
+	}
+	if _, err := os.Stat(filepath.Join(base, "a.bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the finished file went outside the folder: %v", err)
+	}
+
+	outside := filepath.Join(base, "outside")
+	os.Mkdir(outside, 0o755)
+	if err := os.Symlink(outside, filepath.Join(dir, "out")); err != nil {
+		t.Skipf("can't make a symlink here: %v", err)
+	}
+	if f, _, err := openPart(dir, filepath.Join("out", "x"+PartSuffix)); err == nil {
+		f.Close()
+		t.Error("created a part file through a link out of the folder")
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Errorf("wrote through a link out of the folder: %v", entries)
+	}
 }
 
 // A saved name that's nothing once made safe leaves it to the server's.
