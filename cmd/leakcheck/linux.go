@@ -252,7 +252,7 @@ read go || exit 1; exec setpriv --reuid="$2" --regid="$3" --init-groups --inh-ca
 	start := time.Now()
 
 	if app {
-		fmt.Printf("Started Shark BiteTorrent; watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); click Check for updates; and paste https://example.com/ in Paste links (its \"getting downloads\" window opens: let the page load, then close it).\n", secs)
+		fmt.Printf("Started Shark BiteTorrent; watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); click Check for updates; and paste https://trevercomb.github.io/SharkBiteTorrent/leaktest/ in Paste links, tick the link it finds (Leak test page) and add it: its browser window opens the page by itself, and after about 10 seconds the small file sbt-leaktest.bin appears in your downloads (that shows the page ran; remove it afterwards).\n", secs)
 		select {
 		case err := <-exited:
 			return fatalCode(fmt.Sprintf("the app exited after %ds (%v): %s", int(time.Since(start).Seconds()), err, lastLines(appLog.String(), 10)))
