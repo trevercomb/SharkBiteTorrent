@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 )
 
 const maxPage = 8 << 20 // pages and pastes larger than this aren't link lists
@@ -37,6 +39,9 @@ type Link struct {
 	Host string `json:"host"` // lower case, without "www."; empty for magnets
 	Name string `json:"name"` // file name from the address, if it has one
 	Kind Kind   `json:"kind"`
+	// Links are the downloads a page lists, when the page was pasted among
+	// other links and the app could read it (see Expand).
+	Links []Link `json:"links,omitempty"`
 }
 
 // HTTPError is a page that answered with something other than 200: a file
@@ -54,6 +59,66 @@ var urlFragment = regexp.MustCompile(`(\bhttps?://[^\s"'#]*)#[^\s"']*`)
 // user sees (an error, say): a paste's key is there, and it's never shown or
 // sent anywhere.
 func WithoutFragments(s string) string { return urlFragment.ReplaceAllString(s, "$1") }
+
+// Pasted reports whether the links in input are ones the user picked: text
+// they pasted, or a paste's content. Links found on a page they pasted the
+// address of are the page's (menus and the like), not theirs.
+func Pasted(input string) bool {
+	input = strings.TrimSpace(input)
+	u, err := url.Parse(input)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(input, " \t\r\n") {
+		return true
+	}
+	return looksLikePrivateBin(u)
+}
+
+// Expand reads the pages among links, at most max of them and at the same
+// time, so that a page pasted among other links shows what it offers. A
+// page that lists downloads gets them as its Links; one that turns out to
+// be a file becomes a File. One the app can't read (a file host that
+// shows its pages to browsers only) or that lists no downloads stays a
+// Page, for the browser window.
+func Expand(ctx context.Context, hc *http.Client, links []Link, max int) []Link {
+	out := slices.Clone(links)
+	var wg sync.WaitGroup
+	n := 0
+	for i := range out {
+		if out[i].Kind != Page || n == max {
+			continue
+		}
+		n++
+		wg.Add(1)
+		go func(l *Link) {
+			defer wg.Done()
+			pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			u, err := url.Parse(l.URL)
+			if err != nil {
+				return
+			}
+			text, base, err := fetchPage(pctx, hc, u)
+			if errors.Is(err, errNotPage) {
+				l.Kind = File
+				if name := path.Base(u.Path); name != "/" && name != "." {
+					if n, err := url.PathUnescape(name); err == nil {
+						l.Name = n
+					}
+				}
+				return
+			}
+			if err != nil {
+				return
+			}
+			for _, c := range LinksFrom(text, base) {
+				if c.Kind != Page && c.URL != l.URL {
+					l.Links = append(l.Links, c)
+				}
+			}
+		}(&out[i])
+	}
+	wg.Wait()
+	return out
+}
 
 // PageLink is input, an http(s) address, as a page (for the browser window).
 func PageLink(input string) (Link, bool) {

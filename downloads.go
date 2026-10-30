@@ -181,6 +181,10 @@ func newDownloadID() string {
 	return hex.EncodeToString(b)
 }
 
+// maxPagesRead is how many pages among pasted links are read for the
+// files they list; others stay pages.
+const maxPagesRead = 12
+
 // ReadPaste reads what the user pasted (links, a page's address, an
 // encrypted paste) through the VPN and lists the links in it.
 func (a *App) ReadPaste(input string) ([]paste.Link, error) {
@@ -221,6 +225,11 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 	}
 	if len(links) == 0 {
 		return nil, errors.New("no links found in that")
+	}
+	if paste.Pasted(input) {
+		// Pages among links the user pasted: read, so one that lists files
+		// shows them (a page full of links isn't for the browser window).
+		links = paste.Expand(ctx, hc, links, maxPagesRead)
 	}
 	return links, nil
 }

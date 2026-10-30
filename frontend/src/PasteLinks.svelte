@@ -36,6 +36,19 @@
   )
   const others = $derived((links ?? []).filter(l => l.kind === 'page'))
   let showOthers = $state(false)
+  // Pages pasted among other links that list downloads (the app read them):
+  // each one is a group of its own, folded until opened.
+  const groups = $derived(others.filter(l => l.links?.length))
+  const pages = $derived(others.filter(l => !l.links?.length))
+  let openGroups = $state(new Set<string>())
+  function toggleGroup(url: string) {
+    const s = new Set(openGroups)
+    if (s.has(url)) s.delete(url)
+    else s.add(url)
+    openGroups = s
+  }
+  // Every link that can be ticked, groups' files included.
+  const all = $derived((links ?? []).flatMap(l => [l, ...(l.links ?? [])]))
 
   // A long list gets a filter: every word typed must appear in the name or site.
   let filter = $state('')
@@ -43,7 +56,12 @@
     const text = (show(l) + ' ' + (l.host ?? '')).toLowerCase()
     return filter.toLowerCase().split(/\s+/).every(w => text.includes(w))
   }
-  const shown = $derived((showOthers ? [...direct, ...others] : direct).filter(matches))
+  const shown = $derived((showOthers ? [...direct, ...pages] : direct).filter(matches))
+  // A group's files the filter lets through; with a filter, groups open.
+  const inGroup = (g: paste.Link) => (g.links ?? []).filter(matches)
+  const groupOpen = (g: paste.Link) => openGroups.has(g.url) || !!filter
+  const shownGroups = $derived(showOthers ? groups.filter(g => !filter || matches(g) || inGroup(g).length) : [])
+  const visible = $derived([...shown, ...shownGroups.flatMap(g => (groupOpen(g) ? [g, ...inGroup(g)] : []))])
 
   // Ticked from the start only when the list is short (a paste's parts):
   // on a page with dozens of files, the user picks.
@@ -60,8 +78,9 @@
       const found = await ReadPaste(input)
       links = found
       filter = ''
+      openGroups = new Set()
       const files = found.filter(l => l.kind !== 'page')
-      const main = files.length ? files : found
+      const main = files.length ? files : found.filter(l => !l.links?.length)
       showOthers = files.length === 0
       picked = new Set(main.length <= preTick ? main.map(l => l.url) : [])
     } catch (e) {
@@ -80,7 +99,7 @@
   }
 
   async function download() {
-    const chosen = links!.filter(l => picked.has(l.url))
+    const chosen = all.filter((l, i) => picked.has(l.url) && all.findIndex(o => o.url === l.url) === i)
     const c = await askChoice(chosen.length === 1 ? show(chosen[0]) : `${chosen.length} links`)
     if (!c) return
     busy = true
@@ -131,18 +150,18 @@
           {#if direct.length}{direct.length} file{direct.length > 1 ? 's' : ''} or torrent{direct.length > 1 ? 's' : ''}{others.length ? `, ${others.length} other link${others.length > 1 ? 's' : ''}` : ''}
           {:else}{links.length} link{links.length > 1 ? 's' : ''} found{/if}
         </span>
-        <button class="link" onclick={() => (picked = new Set([...picked, ...shown.map(l => l.url)]))}
+        <button class="link" onclick={() => (picked = new Set([...picked, ...visible.map(l => l.url)]))}
           title={filter ? 'Tick every link the filter shows' : 'Tick every link shown'}>All</button>
         <button class="link" onclick={() => (picked = new Set())}>None</button>
       </div>
-      {#if links.length > preTick}
+      {#if all.length > preTick}
         <input class="filter" type="search" bind:value={filter} placeholder="Filter, e.g. “standard 3.20.3”" />
         {#if picked.size === 0 && !filter}
           <p class="muted small hint">Many links: tick the ones you want, or filter and press All.</p>
         {/if}
       {/if}
       <ul>
-        {#if shown.length === 0}<li class="none muted">Nothing matches “{filter}”.</li>{/if}
+        {#if shown.length === 0 && shownGroups.length === 0}<li class="none muted">Nothing matches “{filter}”.</li>{/if}
         {#each shown as l (l.url)}
           <li>
             <label title={l.url}>
@@ -153,10 +172,37 @@
             </label>
           </li>
         {/each}
+        {#each shownGroups as g (g.url)}
+          <li>
+            <button class="more group" onclick={() => toggleGroup(g.url)} title={g.url}>
+              {groupOpen(g) ? '▾' : '▸'} {g.host ? g.host + ': ' : ''}a page with {g.links!.length} download{g.links!.length > 1 ? 's' : ''}
+              <span class="path">{g.url}</span>
+            </button>
+          </li>
+          {#if groupOpen(g)}
+            {#each inGroup(g) as l (l.url)}
+              <li class="sub">
+                <label title={l.url}>
+                  <input type="checkbox" checked={picked.has(l.url)} onchange={() => toggle(l.url)} />
+                  <span class="kind {l.kind}">{kindLabel[l.kind] ?? l.kind}</span>
+                  <span class="name">{show(l)}</span>
+                  {#if l.host && l.host !== g.host}<span class="host">{l.host}</span>{/if}
+                </label>
+              </li>
+            {/each}
+            <li class="sub">
+              <label title={g.url}>
+                <input type="checkbox" checked={picked.has(g.url)} onchange={() => toggle(g.url)} />
+                <span class="kind page">Page</span>
+                <span class="name muted-name">The page itself, in the browser window</span>
+              </label>
+            </li>
+          {/if}
+        {/each}
         {#if direct.length && others.length}
           <li>
             <button class="more" onclick={() => (showOthers = !showOthers)}>
-              {showOthers ? '▾ Hide' : '▸ Show'} other links on the page ({others.length}): file-host pages, and anything that isn't clearly a file
+              {showOthers ? '▾ Hide' : '▸ Show'} other links ({others.length}): pages, and anything that isn't clearly a file
             </button>
           </li>
         {/if}
@@ -209,6 +255,10 @@
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .host { flex: none; color: var(--muted); font-size: 12px; }
   .more { width: 100%; text-align: left; background: none; border: none; padding: 6px 10px; color: var(--accent); }
+  .more.group { display: flex; gap: 8px; min-width: 0; }
+  .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .sub label { padding-left: 30px; }
+  .muted-name { color: var(--muted); }
   .filter { width: 100%; box-sizing: border-box; margin-bottom: 6px; }
   .hint { margin: 0 0 6px; }
   .none { padding: 8px 10px; }

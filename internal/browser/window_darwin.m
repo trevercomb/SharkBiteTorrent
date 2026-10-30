@@ -134,6 +134,12 @@ static SBDenyAll *denyAll;
 @end
 static SBBrowserDelegate *delegate;
 
+// To the front: since macOS 14 only once the app has let it (Show).
+static void activate(void) {
+	if (@available(macOS 14.0, *)) [NSApp activate];
+	else [NSApp activateIgnoringOtherApps:YES];
+}
+
 // What the window never loads: anything on this computer or the local
 // network (the proxy would send it into the VPN, where it can't be reached,
 // but WebKit may not send it to the proxy at all), and audio or video,
@@ -235,7 +241,7 @@ int sbw_open_window(const char *proxy, const char *user, const char *pass, const
 		win.delegate = delegate;
 		[win center];
 		[win makeKeyAndOrderFront:nil];
-		[NSApp activateIgnoringOtherApps:YES];
+		activate();
 		return 0;
 	}
 	return 1;
@@ -275,6 +281,6 @@ void sbw_set_title(const char *t) { if (win) win.title = @(t); }
 void sbw_present(void) {
 	if (!win) return;
 	[win makeKeyAndOrderFront:nil];
-	[NSApp activateIgnoringOtherApps:YES];
+	activate();
 }
 void sbw_close_window(void) { if (win) [win close]; }
