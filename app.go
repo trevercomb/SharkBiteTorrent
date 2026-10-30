@@ -96,6 +96,7 @@ type App struct {
 	sfvResults   map[string]*engine.SFVStatus  // .sfv results not yet in a saved scan record
 	verifyCtx    context.Context               // cancelled on disconnect; stops "Verify files"
 	dl           *downloads                    // direct downloads (downloads.go); guarded by mu
+	direct       directConns                   // made in "No VPN" mode; closed when the mode changes (directconns.go)
 	dlScanStop   map[string]context.CancelFunc // stops a direct download's running malware scan (downloadscan.go); guarded by mu
 	hostMu       sync.Mutex                    // guards host
 	host         *hostBrowser                  // the file-host browser window, while open (hostpages_*.go)
@@ -818,6 +819,7 @@ func (a *App) disconnect() {
 	a.eng, a.tun, a.stopMonitor = nil, nil, nil
 	a.mu.Unlock()
 	vpnprov.SetTunnel(nil)
+	a.direct.closeAll() // the mode may be changing: nothing stays on the normal connection
 	if stop != nil {
 		stop()
 	}

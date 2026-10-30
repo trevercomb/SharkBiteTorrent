@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -194,13 +193,7 @@ func (a *App) hostDial(ctx context.Context, network, addr string) (net.Conn, err
 	if !a.directMode() {
 		return a.dialTunnel(ctx, network, addr)
 	}
-	d := net.Dialer{Resolver: &net.Resolver{}, Control: func(_, address string, _ syscall.RawConn) error {
-		if h, _, err := net.SplitHostPort(address); err != nil || localHost(h) {
-			return fmt.Errorf("%s is on this computer or the home network", address)
-		}
-		return nil
-	}}
-	return d.DialContext(ctx, network, addr)
+	return a.direct.dial(ctx, network, addr, true)
 }
 
 func (a *App) closeHostPages() {

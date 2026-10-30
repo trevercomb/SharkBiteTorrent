@@ -159,9 +159,12 @@ func (a *App) downloadClient() (*http.Client, error) {
 	}
 	if a.directMode() {
 		if d.direct == nil {
-			dialer := &net.Dialer{Timeout: 30 * time.Second, Resolver: &net.Resolver{}}
 			d.direct = &http.Client{Transport: &http.Transport{
-				DialContext:           dialer.DialContext,
+				// Not this computer or the home network, even by a redirect
+				// or a name that resolves there; closed if the VPN mode changes.
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return a.direct.dial(ctx, network, addr, true)
+				},
 				TLSHandshakeTimeout:   30 * time.Second,
 				ResponseHeaderTimeout: 60 * time.Second,
 			}}
@@ -347,8 +350,13 @@ func localHost(host string) bool {
 		return true
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || sharedNet.Contains(ip))
 }
+
+// sharedNet: carrier-grade NAT addresses, which Tailscale uses for the
+// user's other devices (and this computer's own remote control).
+var sharedNet = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
 
 // addTorrentURL fetches a .torrent file through the VPN and adds it.
 func (a *App) addTorrentURL(url string, choice AddChoice) error {
