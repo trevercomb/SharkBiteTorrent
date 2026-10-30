@@ -63,6 +63,11 @@ func (a *App) startDownloads() {
 		// Marked from the internet the moment it's whole, not when its scan
 		// comes up (another file's scan can take a while).
 		Finishing: scan.MarkDownloaded,
+		// As for torrents: never into a drive's empty mount point while
+		// it's away, and only ever deleting the file it created.
+		FolderReady: ensureDownloadDir,
+		Identify:    engine.FileID,
+		SameFile:    engine.SameFileID,
 		OnChange: func() {
 			select {
 			case d.save <- struct{}{}:

@@ -292,6 +292,7 @@ export namespace main {
 	    state: string;
 	    error: string;
 	    offline: boolean;
+	    waiting: string;
 	    scan: string;
 	    scanEngine: string;
 	    threats: string[];
@@ -313,6 +314,7 @@ export namespace main {
 	        this.state = source["state"];
 	        this.error = source["error"];
 	        this.offline = source["offline"];
+	        this.waiting = source["waiting"];
 	        this.scan = source["scan"];
 	        this.scanEngine = source["scanEngine"];
 	        this.threats = source["threats"];
