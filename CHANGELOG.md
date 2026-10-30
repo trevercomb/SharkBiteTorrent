@@ -11,7 +11,7 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 - **Ask where to save each download** (Settings → Downloads, on by default): before anything is added, choose its folder (the default, one of the last five you used, or another) and whether to start it now or add it paused. *Don't ask again* turns it off. Links opened from outside the app get the folder choice in their banner.
 
 ### Fixed
-- **Speed limits** changed while the app was running had no effect until it was restarted: a download could go at full speed with a limit of 300 KB/s. They now apply at once.
+- **Speed limits** changed while the app was running had no effect until it was restarted: a download could go at full speed with a limit of 300 KB/s. They now apply at once, and the download limit is for torrents and direct downloads together.
 
 ## [0.2.41] - 2026-10-27
 
