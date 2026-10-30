@@ -196,9 +196,13 @@ func (a *App) ReadPaste(input string) ([]paste.Link, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The VPN can't reach this computer or the home network: say so at once
-	// rather than after the minute a request there takes to give up.
-	if u, err := url.Parse(strings.TrimSpace(input)); err == nil && localHost(u.Hostname()) && !a.directMode() {
+	// The VPN can't reach this computer or the home network, and without it
+	// the app doesn't go there either (a page's links mustn't make it send
+	// requests to the router): say so at once.
+	if u, err := url.Parse(strings.TrimSpace(input)); err == nil && localHost(u.Hostname()) {
+		if a.directMode() {
+			return nil, fmt.Errorf("%s is on this computer or your home network: Paste links only reads the internet", u.Hostname())
+		}
 		return nil, fmt.Errorf("%s is on this computer or your home network, which the app can't reach through the VPN", u.Hostname())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -401,6 +405,13 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 	if err != nil {
 		return
 	}
+	// A page's download is on the internet: never this computer or the home
+	// network (with No VPN, the app could otherwise be made to fetch from
+	// them), and only over the web. Fresh links for existing downloads too.
+	if u, err := url.Parse(link); err != nil || (u.Scheme != "http" && u.Scheme != "https") || localHost(u.Hostname()) {
+		a.notifyError(fmt.Errorf("%s: its download link isn't on the internet, so it wasn't downloaded", paste.WithoutFragments(page.URL)))
+		return
+	}
 	for _, s := range m.Specs() {
 		if s.Page == page.URL && (page.ID == "" || page.ID == s.ID) {
 			if !s.Done {
@@ -408,13 +419,6 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 			}
 			return
 		}
-	}
-	// A page's download is on the internet: never this computer or the home
-	// network (with No VPN, the app could otherwise be made to fetch from
-	// them), and only over the web.
-	if u, err := url.Parse(link); err != nil || (u.Scheme != "http" && u.Scheme != "https") || localHost(u.Hostname()) {
-		a.notifyError(fmt.Errorf("%s: its download link isn't on the internet, so it wasn't downloaded", paste.WithoutFragments(page.URL)))
-		return
 	}
 	name := ""
 	if _, params, err := mime.ParseMediaType(disposition); err == nil {
