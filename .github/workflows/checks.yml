@@ -82,7 +82,10 @@ jobs:
         run: go test -short -race ./internal/dnsroute ./internal/engine ./internal/search ./internal/secret .
 
   macos:
-    runs-on: macos-26
+    # macOS 27 with Xcode 27 (preview image): built with the macOS 26 SDK,
+    # 0.2.42-beta.5 didn't find Tailscale on macOS 27 while local builds
+    # with the 27 SDK did (same code, Go and flags).
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
