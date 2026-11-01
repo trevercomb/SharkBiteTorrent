@@ -1063,15 +1063,20 @@ func (r *pktapResult) add(line string) {
 
 // timeOf turns tcpdump's time of day into a time on the run's date (a run
 // that passes midnight continues on the next day).
-func (r *pktapResult) timeOf(hms string) time.Time {
+func (r *pktapResult) timeOf(hms string) time.Time { return wallTime(r.day, hms, time.Now()) }
+
+// wallTime is the clock time hms on day, read as the DNS log's times are
+// (time.Local), so the two compare. Not midnight plus that many hours: on
+// the days the clocks change, that's an hour off the clock, and every
+// packet then fell an hour away from the lookups and connect windows.
+func wallTime(day time.Time, hms string, now time.Time) time.Time {
 	t, err := time.ParseInLocation("15:04:05.000000", hms, time.Local)
 	if err != nil {
 		return time.Time{}
 	}
-	at := r.day.Add(time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute +
-		time.Duration(t.Second())*time.Second + time.Duration(t.Nanosecond()))
-	if at.Before(time.Now().Add(-12 * time.Hour)) {
-		at = at.Add(24 * time.Hour)
+	at := time.Date(day.Year(), day.Month(), day.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
+	if at.Before(now.Add(-12 * time.Hour)) {
+		at = time.Date(day.Year(), day.Month(), day.Day()+1, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 	}
 	return at
 }
