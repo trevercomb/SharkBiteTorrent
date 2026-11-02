@@ -14,6 +14,7 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 - **Speed limits** changed while the app was running had no effect until it was restarted: a download could go at full speed with a limit of 300 KB/s. They now apply at once, and the download limit is for torrents and direct downloads together.
 - macOS 15 and later: the remote control said "no home network found" and offered no **Pair a phone** for the home Wi-Fi, because macOS hides the router from apps without Local Network access (and never asks, since the app doesn't contact anything on the home network itself). It now reads the router from macOS's network settings instead.
 - macOS: with Tailscale running and signed in, the remote control's Tailscale option could say "Tailscale isn't running". The Mac app is now built with Xcode 27, which didn't have the problem in testing.
+- macOS 27.2: when a page in the browser window used a site that leaves out part of its certificate chain, macOS fetched the missing certificate itself, over your normal connection instead of the VPN (it revealed only that you used a site with that certificate issuer). The window's proxy now checks each secure site's certificates itself, through the VPN, before the window connects, and refuses sites whose certificates don't check out, so macOS never gets the chance. This applies to the browser window on every system: such sites fail there as they always did in the app itself.
 
 ## [0.2.41] - 2026-10-27
 

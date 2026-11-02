@@ -139,7 +139,7 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		loaded: make(chan string, 8),
 		caught: make(chan caughtDownload, 8),
 		popups: make(chan struct{}, 1),
-		proxy:  &socks.Server{Dial: a.hostDial},
+		proxy:  &socks.Server{Dial: a.hostDial, Vet: (&tlsVetter{dial: a.hostDial}).vet}, // see tlsvet.go
 	}
 	o := browser.Options{
 		Proxy:   ln.Addr().String(),

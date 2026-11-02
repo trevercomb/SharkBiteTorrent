@@ -29,6 +29,11 @@ type Server struct {
 	// browser window's proxy only serves the app's own WebView2 processes).
 	Allow func(net.Conn) bool
 	Dial  Dialer
+	// Vet, if set, sees the first bytes each client sends once its
+	// connection is set up, before anything is relayed, and refuses the
+	// connection by returning an error (the browser window's proxy checks a
+	// site's certificates itself before WebKit sees them).
+	Vet func(ctx context.Context, target string, first []byte) error
 
 	// Requests counts CONNECT requests from clients that logged in, so the
 	// app can confirm a search server really sends its traffic through here.
@@ -121,6 +126,26 @@ func (s *Server) handle(c net.Conn) {
 	defer s.track(up, false)
 	if reply(c, repOK) != nil {
 		return
+	}
+	if s.Vet != nil {
+		buf := make([]byte, 16<<10)
+		c.SetDeadline(time.Now().Add(30 * time.Second))
+		n, err := c.Read(buf)
+		if err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err = s.Vet(ctx, target, buf[:n])
+		cancel()
+		if err != nil {
+			return
+		}
+		if n >= minRequest {
+			s.Sent.Add(int64(n))
+		}
+		if _, err := up.Write(buf[:n]); err != nil {
+			return
+		}
 	}
 	c.SetDeadline(time.Time{})
 

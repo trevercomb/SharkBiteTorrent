@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -114,4 +115,101 @@ func TestSentIgnoresTinyReads(t *testing.T) {
 	if n.Load() != 300 {
 		t.Errorf("a request-sized read counted %d bytes", n.Load())
 	}
+}
+
+// Vet sees the client's first bytes before anything is relayed: allowed,
+// they reach the site intact; refused, nothing does.
+func TestVet(t *testing.T) {
+	got := make(chan []byte, 4)
+	site, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer site.Close()
+	go func() {
+		for {
+			c, err := site.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				b, _ := io.ReadAll(c)
+				got <- b
+			}()
+		}
+	}()
+
+	var mu sync.Mutex
+	var vetted []string
+	var refuse atomic.Bool
+	d := &net.Dialer{}
+	s := &Server{NoAuth: true, Dial: d.DialContext, Vet: func(ctx context.Context, target string, first []byte) error {
+		mu.Lock()
+		vetted = append(vetted, target+" "+string(first))
+		mu.Unlock()
+		if refuse.Load() {
+			return io.ErrUnexpectedEOF
+		}
+		return nil
+	}}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.Serve(ln)
+	defer s.Close()
+
+	send := func(msg string) {
+		c, err := connectVia(ln.Addr().String(), site.Addr().(*net.TCPAddr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(c, msg)
+		c.(*net.TCPConn).CloseWrite()
+		io.ReadAll(c)
+		c.Close()
+	}
+
+	send("hello, site")
+	if b := <-got; string(b) != "hello, site" {
+		t.Errorf("allowed: the site got %q", b)
+	}
+	refuse.Store(true)
+	send("refused")
+	if b := <-got; len(b) != 0 {
+		t.Errorf("refused: the site got %q", b)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(vetted) != 2 || vetted[0] != site.Addr().String()+" hello, site" {
+		t.Errorf("vetted %q", vetted)
+	}
+}
+
+// connectVia opens a connection to an IPv4 address through a SOCKS5 server
+// that needs no password.
+func connectVia(proxy string, to *net.TCPAddr) (net.Conn, error) {
+	c, err := net.Dial("tcp", proxy)
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]byte, 10)
+	req := append([]byte{5, 1, 0, 1}, to.IP.To4()...)
+	req = append(req, byte(to.Port>>8), byte(to.Port))
+	if _, err = c.Write([]byte{5, 1, 0}); err == nil {
+		if _, err = io.ReadFull(c, resp[:2]); err == nil {
+			if _, err = c.Write(req); err == nil {
+				_, err = io.ReadFull(c, resp)
+			}
+		}
+	}
+	if err == nil && resp[1] != 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
 }
