@@ -27,3 +27,43 @@ func TestHostDialRefusesLocal(t *testing.T) {
 		}
 	}
 }
+
+// Through the VPN, a name is looked up first: one that points only to this
+// computer or the home network is refused without trying to connect (inside
+// the tunnel that would hang until it timed out), and of mixed answers only
+// the public addresses are tried.
+func TestDialPublic(t *testing.T) {
+	answers := map[string][]string{
+		"localtest.me":   {"127.0.0.1"},
+		"home.example":   {"192.168.1.5", "fe80::1"},
+		"mixed.example":  {"127.0.0.1", "203.0.113.7", "198.51.100.9"},
+		"public.example": {"203.0.113.8"},
+	}
+	lookup := func(_ context.Context, host string) ([]string, error) { return answers[host], nil }
+	var dialed []string
+	dial := func(_ context.Context, _, addr string) (net.Conn, error) {
+		dialed = append(dialed, addr)
+		if addr == "203.0.113.7:443" {
+			return nil, context.DeadlineExceeded // this one doesn't answer
+		}
+		c, _ := net.Pipe()
+		return c, nil
+	}
+	for _, host := range []string{"localtest.me", "home.example"} {
+		dialed = nil
+		if c, err := dialPublic(context.Background(), lookup, dial, "tcp", host+":443"); err == nil || len(dialed) != 0 {
+			if c != nil {
+				c.Close()
+			}
+			t.Errorf("%s: err %v, dialed %q; want refused without dialing", host, err, dialed)
+		}
+	}
+	dialed = nil
+	c, err := dialPublic(context.Background(), lookup, dial, "tcp", "mixed.example:443")
+	if err != nil || len(dialed) != 2 || dialed[0] != "203.0.113.7:443" || dialed[1] != "198.51.100.9:443" {
+		t.Errorf("mixed: err %v, dialed %q; want the public addresses in order", err, dialed)
+	}
+	if c != nil {
+		c.Close()
+	}
+}

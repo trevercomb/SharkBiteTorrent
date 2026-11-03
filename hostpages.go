@@ -139,7 +139,7 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		loaded: make(chan string, 8),
 		caught: make(chan caughtDownload, 8),
 		popups: make(chan struct{}, 1),
-		proxy:  &socks.Server{Dial: a.hostDial, Vet: (&tlsVetter{dial: a.hostDial}).vet}, // see tlsvet.go
+		proxy:  &socks.Server{Open: (&tlsVetter{dial: a.hostDial}).open}, // see tlsvet.go
 	}
 	o := browser.Options{
 		Proxy:   ln.Addr().String(),
@@ -197,9 +197,56 @@ func (a *App) hostDial(ctx context.Context, network, addr string) (net.Conn, err
 		return nil, fmt.Errorf("%s is on this computer or the home network", host)
 	}
 	if !a.directMode() {
-		return a.dialTunnel(ctx, network, addr)
+		a.mu.Lock()
+		tun := a.tun
+		a.mu.Unlock()
+		if tun == nil {
+			return nil, errors.New("VPN not connected")
+		}
+		if net.ParseIP(host) != nil {
+			return tun.DialContext(ctx, network, addr)
+		}
+		return dialPublic(ctx, tun.Net().LookupContextHost, tun.DialContext, network, addr)
 	}
 	return a.direct.dial(ctx, network, addr, true)
+}
+
+// dialPublic looks a host name up (inside the VPN) and connects to the
+// addresses it gives that aren't this computer or the home network. A name
+// that points only there (localtest.me is 127.0.0.1) is refused at once:
+// connecting to it inside the tunnel would wait until it timed out, and a
+// page waiting on it doesn't finish loading.
+func dialPublic(ctx context.Context, lookup func(context.Context, string) ([]string, error), dial socks.Dialer, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	public := 0
+	var firstErr error
+	for _, ip := range ips {
+		if localHost(ip) {
+			continue
+		}
+		public++
+		c, err := dial(ctx, network, net.JoinHostPort(ip, port))
+		if err == nil {
+			return c, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if public == 0 {
+		return nil, fmt.Errorf("%s points to this computer or the home network", host)
+	}
+	return nil, firstErr
 }
 
 func (a *App) closeHostPages() {

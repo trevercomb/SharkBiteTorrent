@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestProxy(t *testing.T) {
@@ -117,9 +118,9 @@ func TestSentIgnoresTinyReads(t *testing.T) {
 	}
 }
 
-// Vet sees the client's first bytes before anything is relayed: allowed,
-// they reach the site intact; refused, nothing does.
-func TestVet(t *testing.T) {
+// Open sees the client's first bytes and opens the connection: allowed,
+// they reach the site intact; refused, nothing connects to the site at all.
+func TestOpen(t *testing.T) {
 	got := make(chan []byte, 4)
 	site, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -141,17 +142,17 @@ func TestVet(t *testing.T) {
 	}()
 
 	var mu sync.Mutex
-	var vetted []string
+	var opened []string
 	var refuse atomic.Bool
 	d := &net.Dialer{}
-	s := &Server{NoAuth: true, Dial: d.DialContext, Vet: func(ctx context.Context, target string, first []byte) error {
+	s := &Server{NoAuth: true, Open: func(ctx context.Context, target string, first []byte) (net.Conn, error) {
 		mu.Lock()
-		vetted = append(vetted, target+" "+string(first))
+		opened = append(opened, target+" "+string(first))
 		mu.Unlock()
 		if refuse.Load() {
-			return io.ErrUnexpectedEOF
+			return nil, io.ErrUnexpectedEOF
 		}
-		return nil
+		return d.DialContext(ctx, "tcp", target)
 	}}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -177,13 +178,15 @@ func TestVet(t *testing.T) {
 	}
 	refuse.Store(true)
 	send("refused")
-	if b := <-got; len(b) != 0 {
-		t.Errorf("refused: the site got %q", b)
+	select {
+	case b := <-got:
+		t.Errorf("refused: the site got a connection (%q)", b)
+	case <-time.After(200 * time.Millisecond):
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(vetted) != 2 || vetted[0] != site.Addr().String()+" hello, site" {
-		t.Errorf("vetted %q", vetted)
+	if len(opened) != 2 || opened[0] != site.Addr().String()+" hello, site" {
+		t.Errorf("opened %q", opened)
 	}
 }
 
