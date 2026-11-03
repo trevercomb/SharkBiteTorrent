@@ -148,3 +148,5 @@ require (
 replace a.local/earlyinit => ./earlyinit
 
 replace github.com/wailsapp/go-webview2 => ./third_party/go-webview2
+
+replace github.com/anacrolix/torrent => ./third_party/anacrolix-torrent

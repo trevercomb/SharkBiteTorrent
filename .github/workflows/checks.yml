@@ -53,6 +53,9 @@ jobs:
       - name: Patched go-webview2 is upstream + only the documented patch
         shell: bash
         run: scripts/check-webview2-patch.sh
+      - name: Patched anacrolix/torrent is upstream + only the documented fix
+        shell: bash
+        run: scripts/check-torrent-patch.sh
       - name: govulncheck (known vulnerabilities in code the app calls)
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
