@@ -57,6 +57,11 @@ var webviewQuietArgs = []string{
 		"msImplicitSignin", "msImplicitSignInNetworkRetry",
 		"msEdgeOSAccountInfoSubstrate", "msEdgeOSAccountInfoManagerCache",
 		"msOneAuthWAM", "msOneAuthIDHRD", "msSsoByHttpDefer",
+		// WebView2 157 (2026-11) loads its account library (OneAuth) at
+		// startup, which reached substrate.office.com through Windows' own
+		// networking, where the switches above don't apply. With this off,
+		// the library isn't loaded at all.
+		"msForceOneAuthWAM",
 		"TextPrediction", "EditorProofing",
 		"msEdgeEditorEnvironmentEndpointDetection", "msEdgeEditorSpellcheckerDlpCheck",
 		"AutofillServerCommunication", "OptimizationHints", "MediaRouter", "Translate", "msEdgeTranslate",
