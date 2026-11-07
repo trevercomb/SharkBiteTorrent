@@ -88,9 +88,10 @@ func (a *App) updateClient(allowDirect bool) (*http.Client, bool, error) {
 		return nil, false, errVPNDown
 	}
 	// Direct, as the user agreed: the system's own DNS, and no proxy from
-	// the environment.
+	// the environment. No connection is kept open afterwards: the user
+	// agreed to this check, not to an idle connection to GitHub.
 	d := &net.Dialer{Timeout: 30 * time.Second, Resolver: &net.Resolver{}}
-	return &http.Client{Timeout: 10 * time.Minute, Transport: &http.Transport{DialContext: d.DialContext, TLSHandshakeTimeout: 30 * time.Second}}, true, nil
+	return &http.Client{Timeout: 10 * time.Minute, Transport: &http.Transport{DialContext: d.DialContext, TLSHandshakeTimeout: 30 * time.Second, DisableKeepAlives: true}}, true, nil
 }
 
 func (a *App) checkUpdate(ctx context.Context, allowDirect bool) (UpdateInfo, error) {

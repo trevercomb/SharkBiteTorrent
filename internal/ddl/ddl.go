@@ -14,6 +14,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -69,6 +70,9 @@ type Spec struct {
 	// when the download started on this link: parts fetched later must be
 	// of the same file (If-Range), not a new one of the same size.
 	Validator string `json:"validator,omitempty"`
+	// Warned is a name the user was already warned about (NameCheck, or
+	// the app before adding it): resuming goes on without asking again.
+	Warned string `json:"warned,omitempty"`
 	// Meta is the app's own data about the download (its malware scan),
 	// kept and saved with it but never looked at here.
 	Meta json.RawMessage `json:"meta,omitempty"`
@@ -99,6 +103,9 @@ var ErrLinkExpired = errors.New("the download link stopped working")
 // VPN is down), so downloads wait instead of failing.
 var ErrOffline = errors.New("no connection")
 
+// errHeld: NameCheck stopped the download for the user to look at its name.
+var errHeld = errors.New("held for its name")
+
 type Manager struct {
 	// Client returns the HTTP client to use now (the VPN's); an error means
 	// there's no connection, and downloads wait.
@@ -124,6 +131,11 @@ type Manager struct {
 	// check it before deleting: Remove only deletes the file it created.
 	Identify func(path string) (string, error)
 	SameFile func(id, path string) bool
+	// NameCheck, if set, is asked about a name the server chose (the
+	// download had none) before any of the file is fetched: a reason means
+	// the download stops, paused, for the user to look (a disguised
+	// program, say). A name it was already asked about isn't asked again.
+	NameCheck func(s Spec) string
 
 	mu   sync.Mutex
 	jobs map[string]*job
@@ -453,6 +465,8 @@ func (m *Manager) run(ctx context.Context, j *job) {
 		// stopped: Pause/Remove/Close set the state
 	case err == nil:
 		j.state, j.spec.Done = Done, true
+	case errors.Is(err, errHeld):
+		j.state, j.spec.Paused = Paused, true
 	case errors.Is(err, ErrLinkExpired) && j.spec.Page != "":
 		j.state, j.spec.NeedLink, j.spec.Error = NeedsLink, true, err.Error()
 	default:
@@ -466,6 +480,7 @@ func (m *Manager) run(ctx context.Context, j *job) {
 func (m *Manager) download(ctx context.Context, j *job) error {
 	m.mu.Lock()
 	needProbe := len(j.spec.Segments) == 0 || j.spec.Name == ""
+	serverNames := j.spec.Name == ""
 	m.mu.Unlock()
 	if needProbe {
 		if err := m.probe(ctx, j); err != nil {
@@ -474,6 +489,17 @@ func (m *Manager) download(ctx context.Context, j *job) error {
 	}
 	m.mu.Lock()
 	spec := j.spec
+	m.mu.Unlock()
+	if serverNames && m.NameCheck != nil && spec.Name != spec.Warned {
+		if reason := m.NameCheck(spec); reason != "" {
+			m.mu.Lock()
+			j.spec.Warned = spec.Name
+			m.mu.Unlock()
+			return errHeld
+		}
+	}
+	m.mu.Lock()
+	spec = j.spec
 	j.pos = make([]int64, len(spec.Segments))
 	for i, s := range spec.Segments {
 		j.pos[i] = s.Pos
@@ -612,13 +638,26 @@ func (m *Manager) request(ctx context.Context, url string, from, to int64, ifRan
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, hideLink(err)
 	}
 	if err := checkResponse(resp); err != nil {
 		resp.Body.Close()
 		return nil, err
 	}
 	return resp, nil
+}
+
+// hideLink cuts the link in a request error down to its scheme and host:
+// the message is shown and saved, and a link's signed query or #key
+// mustn't be. The error stays what it was (errors.Is still works).
+func hideLink(err error) error {
+	var ue *neturl.Error
+	if errors.As(err, &ue) {
+		if u, perr := neturl.Parse(ue.URL); perr == nil {
+			ue.URL = u.Scheme + "://" + u.Host
+		}
+	}
+	return err
 }
 
 // checkResponse sorts out answers that aren't the file.

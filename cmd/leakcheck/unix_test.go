@@ -84,4 +84,12 @@ func TestClassifyBetweenOwnProcesses(t *testing.T) {
 	if len(list) != 1 || !strings.Contains(list[0], "127.0.0.1:8118") {
 		t.Errorf("leaks %q, want only the system proxy", list)
 	}
+
+	// macOS: the system proxy's untagged replies credited to the app by
+	// their connection don't make it look like the app talking to itself.
+	flows = append(flows, flow{proto: "tcp", src: "127.0.0.1", dst: "127.0.0.1", sport: 8118, dport: 50001, packets: 5, byConn: true})
+	list, _, _, _ = classify(flows, pol)
+	if !strings.Contains(strings.Join(list, "\n"), "127.0.0.1:8118") {
+		t.Errorf("with replies credited by connection: leaks %q, want the system proxy among them", list)
+	}
 }

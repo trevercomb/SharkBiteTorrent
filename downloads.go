@@ -71,6 +71,9 @@ func (a *App) startDownloads() {
 		FolderReady: ensureDownloadDir,
 		Identify:    engine.FileID,
 		SameFile:    engine.SameFileID,
+		// A name only the server gave (a page's link said nothing, or the
+		// pasted link had none) is checked before any of it is downloaded.
+		NameCheck: a.serverNameCheck,
 		OnChange: func() {
 			select {
 			case d.save <- struct{}{}:
@@ -130,6 +133,44 @@ func (a *App) stopDownloads() {
 	a.writeDownloads(d)
 }
 
+// dialPublic looks a host name up (inside the VPN) and connects to the
+// addresses it gives that aren't this computer or the home network. A name
+// that points only there (localtest.me is 127.0.0.1) is refused at once:
+// connecting to it inside the tunnel would wait until it timed out, and a
+// page waiting on it doesn't finish loading. (Downloads use it too.)
+func dialPublic(ctx context.Context, lookup func(context.Context, string) ([]string, error), dial func(ctx context.Context, network, addr string) (net.Conn, error), network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	public := 0
+	var firstErr error
+	for _, ip := range ips {
+		if localHost(ip) {
+			continue
+		}
+		public++
+		c, err := dial(ctx, network, net.JoinHostPort(ip, port))
+		if err == nil {
+			return c, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if public == 0 {
+		return nil, fmt.Errorf("%s points to this computer or the home network", host)
+	}
+	return nil, firstErr
+}
+
 // downloadClient is the HTTP client for downloads: the VPN's, or the normal
 // connection only when the user chose No VPN. Otherwise there's none, and
 // downloads wait (ddl.ErrOffline).
@@ -144,13 +185,18 @@ func (a *App) downloadClient() (*http.Client, error) {
 			d.clientTun = tun
 			d.client = &http.Client{Transport: &http.Transport{
 				// The internet only, as without the VPN: a private address
-				// (from a link or a redirect) would reach the VPN provider's
-				// own network, which is no business of a download.
+				// (from a link, a redirect, or a name that resolves there)
+				// would reach the VPN provider's own network, which is no
+				// business of a download.
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					if h, _, err := net.SplitHostPort(addr); err != nil || localHost(h) {
+					h, _, err := net.SplitHostPort(addr)
+					if err != nil || localHost(h) {
 						return nil, fmt.Errorf("%s isn't on the internet", addr)
 					}
-					return tun.DialContext(ctx, network, addr)
+					if net.ParseIP(h) != nil {
+						return tun.DialContext(ctx, network, addr)
+					}
+					return dialPublic(ctx, tun.Net().LookupContextHost, tun.DialContext, network, addr)
 				},
 				TLSHandshakeTimeout:   30 * time.Second,
 				ResponseHeaderTimeout: 60 * time.Second,
@@ -278,11 +324,13 @@ func (a *App) addLinks(links []paste.Link, choice AddChoice) (AddLinksResult, er
 			go func(u string) {
 				defer wg.Done()
 				sem <- struct{}{}
-				ok := a.servesFile(u)
+				file, asked := a.servesFile(u)
 				<-sem
-				isFileMu.Lock()
-				isFile[u] = ok
-				isFileMu.Unlock()
+				if asked {
+					isFileMu.Lock()
+					isFile[u] = file
+					isFileMu.Unlock()
+				}
 			}(l.URL)
 		}
 	}
@@ -290,10 +338,13 @@ func (a *App) addLinks(links []paste.Link, choice AddChoice) (AddLinksResult, er
 
 	var pages []hostPage
 	for _, l := range links {
+		// A link that couldn't be asked (the VPN went down since Find
+		// links) stays what its address suggested.
+		file, asked := isFile[l.URL]
 		switch {
-		case l.Kind == paste.File && !isFile[l.URL]:
+		case asked && l.Kind == paste.File && !file:
 			l.Kind = paste.Page
-		case l.Kind == paste.Page && isFile[l.URL]:
+		case asked && l.Kind == paste.Page && file:
 			l.Kind = paste.File
 		}
 		var err error
@@ -316,7 +367,7 @@ func (a *App) addLinks(links []paste.Link, choice AddChoice) (AddLinksResult, er
 			pages = append(pages, hostPage{URL: l.URL, Dir: dir, Paused: choice.Paused})
 		}
 		if err != nil {
-			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", engine.Redact(l.URL), err))
+			res.Errors = append(res.Errors, paste.WithoutFragments(fmt.Sprintf("%s: %v", engine.Redact(l.URL), err)))
 		}
 	}
 	if len(pages) > 0 {
@@ -334,28 +385,29 @@ func (a *App) addLinks(links []paste.Link, choice AddChoice) (AddLinksResult, er
 }
 
 // servesFile asks for a link's first byte: true if the answer is the file
-// itself, false if it's a web page, a refusal (a file host's page, or a
-// check that only a browser passes) or nothing at all.
-func (a *App) servesFile(url string) bool {
+// itself, false if it's a web page or a refusal (a file host's page, or a
+// check that only a browser passes) or no answer. asked is false if there
+// was no connection to ask with (the VPN went down).
+func (a *App) servesFile(url string) (file, asked bool) {
 	hc, err := a.downloadClient()
 	if err != nil {
-		return true // no connection to ask with: the download waits and tells later
+		return false, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return false
+		return false, true // not a link that can be fetched: the browser window's to try
 	}
 	req.Header.Set("User-Agent", paste.UserAgent)
 	req.Header.Set("Range", "bytes=0-0")
 	resp, err := hc.Do(req)
 	if err != nil {
-		return false
+		return false, true // no answer to an app: maybe one for the browser window
 	}
 	resp.Body.Close()
 	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	return (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) && ct != "text/html"
+	return (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) && ct != "text/html", true
 }
 
 // localHost is true for this computer and private network addresses
@@ -432,12 +484,16 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 		a.notifyError(fmt.Errorf("%s: its download link isn't on the internet, so it wasn't downloaded", paste.WithoutFragments(page.URL)))
 		return
 	}
-	for _, s := range m.Specs() {
-		if s.Page == page.URL && (page.ID == "" || page.ID == s.ID) {
-			if !s.Done {
-				m.SetURL(s.ID, link) // a fresh link for a download that has one already
+	// Get a new link (page.ID): the fresh link is that download's. A page
+	// added again is a new download, whatever came from it before.
+	if page.ID != "" {
+		for _, s := range m.Specs() {
+			if s.ID == page.ID {
+				if !s.Done {
+					m.SetURL(s.ID, link)
+				}
+				return
 			}
-			return
 		}
 	}
 	name := ""
@@ -452,7 +508,10 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 	// one too): one named like a disguised program (a video that's really
 	// a program, a double extension) waits, paused, for the user to look,
 	// as a torrent with such files does, before any of it is downloaded.
+	// The server may still name it otherwise when it starts (ddl's
+	// NameCheck): that name is checked then.
 	paused := page.Paused
+	warned := ""
 	shown := name
 	if shown == "" {
 		if u, err := url.Parse(link); err == nil {
@@ -460,7 +519,7 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 		}
 	}
 	if reason := nameWarning(shown); reason != "" {
-		paused = true
+		paused, warned = true, ddl.SafeName(shown)
 		host := ""
 		if u, err := url.Parse(link); err == nil {
 			host = " (from " + u.Hostname() + ")"
@@ -468,7 +527,7 @@ func (a *App) addFromHost(page hostPage, link, disposition string) {
 		a.notifyError(fmt.Errorf("%s%s, from the page %s, was added paused: %s. Resume it only if it's what you meant to download",
 			ddl.SafeName(shown), host, paste.WithoutFragments(page.URL), reason))
 	}
-	if err := m.Add(ddl.Spec{ID: newDownloadID(), URL: link, Page: page.URL, Dir: dir, Name: name, Paused: paused}); err != nil {
+	if err := m.Add(ddl.Spec{ID: newDownloadID(), URL: link, Page: page.URL, Dir: dir, Name: name, Paused: paused, Warned: warned}); err != nil {
 		a.notifyError(err)
 	}
 }
@@ -561,6 +620,25 @@ func (a *App) OpenDownloadFolder(id string) error {
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// serverNameCheck holds a direct download whose server-given name looks
+// like a disguised program, before any of it is downloaded, and says so.
+func (a *App) serverNameCheck(s ddl.Spec) string {
+	reason := nameWarning(s.Name)
+	if reason == "" {
+		return ""
+	}
+	from := ""
+	if u, err := url.Parse(s.URL); err == nil {
+		from = " (from " + u.Hostname() + ")"
+	}
+	if s.Page != "" {
+		from += ", from the page " + paste.WithoutFragments(s.Page) + ","
+	}
+	a.notifyError(fmt.Errorf("%s%s was paused before downloading: %s. Resume it only if it's what you meant to download",
+		s.Name, from, reason))
+	return reason
 }
 
 // nameWarning is why a download's name looks like a disguised program
