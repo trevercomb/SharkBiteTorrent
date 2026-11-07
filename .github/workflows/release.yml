@@ -247,7 +247,7 @@ jobs:
         include:
           - { os: windows-2025, cgo: "0", goflags: "" } # release builds for Windows are pure Go
           - { os: ubuntu-22.04, cgo: "1", goflags: "-tags=webkit2_41" } # as the Linux release is built
-          - { os: macos-26, cgo: "1", goflags: "" }
+          - { os: xcode-27, cgo: "1", goflags: "" } # as the macOS release is built
     runs-on: ${{ matrix.os }}
     # bash everywhere: PowerShell doesn't stop when a command fails, so a
     # multi-command step only failed if its LAST command did (Windows test

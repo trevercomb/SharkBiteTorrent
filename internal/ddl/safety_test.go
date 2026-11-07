@@ -1,9 +1,12 @@
 package ddl
 
 import (
+	"context"
 	"errors"
+	neturl "net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -147,6 +150,57 @@ func TestStaysInFolder(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
 		t.Errorf("wrote through a link out of the folder: %v", entries)
+	}
+}
+
+// A name only the server gives is checked before any of the file is
+// downloaded; once the user resumes, it isn't held again.
+func TestServerNameHeld(t *testing.T) {
+	data := testData(t, 1000)
+	srv := rangeServer(t, data, nil) // names it "test file.bin"
+	dir := t.TempDir()
+	m := newManager(nil)
+	var asked atomic.Int64
+	m.NameCheck = func(s Spec) string {
+		asked.Add(1)
+		if s.Name != "test file.bin" {
+			t.Errorf("asked about %q", s.Name)
+		}
+		return "looks like a program"
+	}
+	m.Add(Spec{ID: "a", URL: srv.URL + "/get", Dir: dir})
+	waitState(t, m, "a", Paused)
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("wrote before the name was checked: %v", entries)
+	}
+	if !m.Specs()[0].Paused {
+		t.Error("held but not saved as paused (a restart would start it)")
+	}
+	m.Resume("a")
+	waitState(t, m, "a", Done)
+	checkFile(t, filepath.Join(dir, "test file.bin"), data)
+	if asked.Load() != 1 {
+		t.Errorf("asked %d times", asked.Load())
+	}
+
+	// A name the download already had (the page or link gave it) is the
+	// app's to check when adding; not asked here.
+	m.Add(Spec{ID: "b", URL: srv.URL + "/get", Dir: dir, Name: "b.bin"})
+	waitState(t, m, "b", Done)
+	if asked.Load() != 1 {
+		t.Errorf("asked about a name the download already had")
+	}
+}
+
+// A failed request's message (shown, and saved in downloads.json) keeps the
+// host but not the link's signed query or #key.
+func TestErrorHidesLink(t *testing.T) {
+	err := hideLink(&neturl.Error{Op: "Get", URL: "https://files.example/f.bin?token=SECRET#KEY", Err: context.DeadlineExceeded})
+	if msg := err.Error(); strings.Contains(msg, "SECRET") || strings.Contains(msg, "KEY") || !strings.Contains(msg, "https://files.example") {
+		t.Errorf("error: %q", msg)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Error("no longer the error it was")
 	}
 }
 

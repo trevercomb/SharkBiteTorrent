@@ -212,6 +212,7 @@ func (a *App) startup(ctx context.Context) {
 		}()
 		return
 	}
+	removeStaleTemps(a.configDir)
 	a.loadSettings()
 	a.downLimiter = engine.NewLimiter(a.settings.DownLimitKB * 1024)
 	a.loadSaved()
@@ -1738,6 +1739,18 @@ func writeFile(path string, data []byte) error {
 		os.Remove(tmp)
 	}
 	return err
+}
+
+// removeStaleTemps deletes writeFile's temporary files that a crash or a
+// power cut left in dir (only this copy of the app writes there: it runs
+// once it has the single-instance lock).
+func removeStaleTemps(dir string) {
+	old, _ := filepath.Glob(filepath.Join(dir, "*.json.*.tmp"))
+	for _, p := range old {
+		if st, err := os.Lstat(p); err == nil && st.Mode().IsRegular() && time.Since(st.ModTime()) > time.Hour {
+			os.Remove(p)
+		}
+	}
 }
 
 func copyFile(src, dst string) error {

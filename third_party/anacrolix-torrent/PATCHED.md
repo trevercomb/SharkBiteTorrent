@@ -2,7 +2,7 @@
 
 Shark BiteTorrent uses this copy (via a `replace` in the root `go.mod`) instead of the published module, for one reason: a security fix that upstream has only in an untagged commit.
 
-**GHSA-2wrx-84qj-4pcg** (Dependabot alert #9): the bencode decoder recursed once per level of nested dicts and lists, with no limit. Bencode comes from `.torrent` files and from other peers (the extension handshake, metadata, the DHT), so a crafted message nested a few million levels deep could crash the app with a fatal stack overflow (Go can't recover from that), and deeply nested v2 file trees decoded quadratically. Fixed upstream in [`76452a2c8a2f`](https://github.com/anacrolix/torrent/commit/76452a2c8a2f) (2026-09-11), 128 commits past v1.61.0, with no release tagged since.
+**GHSA-2wrx-84qj-4pcg** (GO-2026-6894, Dependabot alert #9): the bencode decoder recursed once per level of nested dicts and lists, with no limit. Bencode comes from `.torrent` files and from other peers (the extension handshake, metadata, the DHT), so a crafted message nested a few million levels deep could crash the app with a fatal stack overflow (Go can't recover from that), and deeply nested v2 file trees decoded quadratically. Fixed upstream in [`76452a2c8a2f`](https://github.com/anacrolix/torrent/commit/76452a2c8a2f) (2026-09-11), 128 commits past v1.61.0, with no release tagged since.
 
 ## The patch
 

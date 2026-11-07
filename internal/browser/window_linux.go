@@ -36,6 +36,13 @@ static gboolean deny_all(WebKitWebView *v, WebKitPolicyDecision *dec, WebKitPoli
 	return TRUE;
 }
 
+// Location, camera, notifications and the like: refused before anything
+// asks the system (GeoClue would look the location up outside the VPN).
+static gboolean deny_permission(WebKitWebView *v, WebKitPermissionRequest *r, gpointer d) {
+	webkit_permission_request_deny(r);
+	return TRUE;
+}
+
 static gboolean drop_standin(gpointer w) {
 	gtk_widget_destroy(GTK_WIDGET(w));
 	g_object_unref(w);
@@ -216,6 +223,7 @@ static int open_window(const char *proxy, const char *datadir, const char *title
 	g_signal_connect(view, "load-changed", G_CALLBACK(on_load_changed), NULL);
 	g_signal_connect(view, "create", G_CALLBACK(on_create), NULL);
 	g_signal_connect(view, "decide-policy", G_CALLBACK(on_decide_policy), NULL);
+	g_signal_connect(view, "permission-request", G_CALLBACK(deny_permission), NULL);
 
 	win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_title(GTK_WINDOW(win), title);

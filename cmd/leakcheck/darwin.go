@@ -1237,11 +1237,12 @@ func (r *pktapResult) forWatched(w *macWatch, local map[string]bool, mdns map[in
 		c := connOf(k)
 		untaggedish := (k.proc == 0 || k.proc == kernelPID) && k.eproc == 0
 		pid := 0
+		byConn := false
 		switch {
 		case w.has(k.proc) || w.has(k.eproc):
 			pid = watchedPID(w, k)
 		case untaggedish && owner[c] != 0:
-			pid = owner[c]
+			pid, byConn = owner[c], true
 			u.rescued += s.n
 		case untaggedish && (k.proto == "tcp" || k.proto == "udp") && w.portPID(k.proto, k.sport) != 0:
 			pid = w.portPID(k.proto, k.sport)
@@ -1268,7 +1269,7 @@ func (r *pktapResult) forWatched(w *macWatch, local map[string]bool, mdns map[in
 			continue // someone else's
 		}
 		f := flow{proto: k.proto, src: k.src, dst: k.dst, sport: k.sport, dport: k.dport, packets: s.n,
-			who: fmt.Sprintf("%s PID %d", clientName(r, pid), pid)}
+			who: fmt.Sprintf("%s PID %d", clientName(r, pid), pid), byConn: byConn}
 		switch {
 		case pid != root:
 			f.notDocumented = "not from the app's main process"

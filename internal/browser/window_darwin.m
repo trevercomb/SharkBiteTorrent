@@ -214,6 +214,12 @@ int sbw_open_window(const char *proxy, const char *user, const char *pass, const
 		((void (*)(id, SEL, BOOL))objc_msgSend)(c.preferences, noRTC, NO);
 		[c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:noRTCScript
 			injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+		// No DNS prefetching either: the proxy doesn't cover it if WebKit
+		// decides from the system's proxy settings. Its own switch again;
+		// the leak test (with the test page) is what shows it holds.
+		SEL noPrefetch = NSSelectorFromString(@"_setDNSPrefetchingEnabled:");
+		if ([c.preferences respondsToSelector:noPrefetch])
+			((void (*)(id, SEL, BOOL))objc_msgSend)(c.preferences, noPrefetch, NO);
 		// The block rules, compiled before anything loads (the answer comes
 		// on this thread, so it's waited for here).
 		__block WKContentRuleList *rules = nil;

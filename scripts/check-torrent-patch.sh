@@ -44,5 +44,29 @@ while read -r f hash; do
     problems=1
   fi
 done <<< "$want"
-[ "$problems" = 0 ] && echo "third_party/anacrolix-torrent = upstream $ver + the documented patch"
+
+# govulncheck can't match advisories to a directory replacement, so ask OSV
+# (which Go's vulnerability database feeds) about $ver directly: every
+# advisory must be one PATCHED.md says this copy fixes (by any of its IDs).
+# No answer fails too: a check that silently passes is worse than none.
+osv=$(curl -fsS --max-time 30 -X POST https://api.osv.dev/v1/query \
+  -d "{\"package\":{\"name\":\"github.com/anacrolix/torrent\",\"ecosystem\":\"Go\"},\"version\":\"${ver#v}\"}") || {
+  echo "couldn't ask OSV about anacrolix/torrent $ver's advisories" >&2
+  exit 1
+}
+unfixed=$(printf '%s' "$osv" | python3 -c '
+import json, sys
+patched = open("third_party/anacrolix-torrent/PATCHED.md", encoding="utf-8").read()
+for v in json.load(sys.stdin).get("vulns", []):
+    ids = [v["id"], *v.get("aliases", [])]
+    if not any(i in patched for i in ids):
+        print(" / ".join(ids))
+')
+if [ -n "$unfixed" ]; then
+  echo "anacrolix/torrent $ver has advisories this copy doesn't fix (see PATCHED.md):" >&2
+  echo "$unfixed" >&2
+  problems=1
+fi
+
+[ "$problems" = 0 ] && echo "third_party/anacrolix-torrent = upstream $ver + the documented patch; no unfixed advisories"
 exit "$problems"
