@@ -52,6 +52,12 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended
+          # The torrent library's copy (upstream's code plus one upstream fix,
+          # until the next library update) isn't ours to review here; it
+          # wasn't scanned before it was copied in either.
+          config: |
+            paths-ignore:
+              - third_party/anacrolix-torrent
 
       - if: matrix.language == 'go'
         name: Build
