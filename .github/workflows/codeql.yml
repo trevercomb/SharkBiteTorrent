@@ -52,12 +52,6 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended
-          # The torrent library's copy (upstream's code plus one upstream fix,
-          # until the next library update) isn't ours to review here; it
-          # wasn't scanned before it was copied in either.
-          config: |
-            paths-ignore:
-              - third_party/anacrolix-torrent
 
       - if: matrix.language == 'go'
         name: Build
@@ -65,4 +59,27 @@ jobs:
 
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
+          category: /language:${{ matrix.language }}
+          upload: never
+          output: sarif
+
+      # The torrent library's copy (upstream's code plus one upstream fix,
+      # until the next library update) isn't ours to review here; it wasn't
+      # scanned before it was copied in either. paths-ignore doesn't apply to
+      # Go, so its results are dropped from the report before upload.
+      - name: Leave out third_party/anacrolix-torrent
+        shell: python
+        run: |
+          import glob, json
+          for p in glob.glob('sarif/*.sarif'):
+              d = json.load(open(p))
+              for run in d['runs']:
+                  run['results'] = [r for r in run.get('results', []) if not any(
+                      l.get('physicalLocation', {}).get('artifactLocation', {}).get('uri', '').startswith('third_party/anacrolix-torrent/')
+                      for l in r.get('locations', []))]
+              json.dump(d, open(p, 'w'))
+
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: sarif
           category: /language:${{ matrix.language }}
