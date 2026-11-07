@@ -28,7 +28,8 @@ EXCLUDE = re.compile(
 
 def git(*args):
     return subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8"
+        ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8",
+        errors="replace",  # a test file's stray byte mustn't stop the run
     ).stdout
 
 
@@ -52,7 +53,9 @@ def main():
     # audit must see everything since the previous release.
     tag = git("describe", "--tags", "--abbrev=0", "--match", "v*", "--exclude", "*-*").strip()
     head = git("rev-parse", "--short", "HEAD").strip()
-    diff = git("diff", f"{tag}..HEAD")
+    # Like the files below, the diff leaves out vendored code (third_party/ has
+    # upstream libraries, test .torrent files included).
+    diff = git("diff", f"{tag}..HEAD", "--", ".", ":(exclude)third_party")
 
     files = [
         f for f in git("ls-files").splitlines() if INCLUDE.search(f) and not EXCLUDE.search(f)
