@@ -2,6 +2,14 @@
 
 What changed in each release of Shark BiteTorrent. The release notes on GitHub are taken from this file, so every release's section should say what users will notice.
 
+## [Unreleased]
+
+### Added
+- **Find things in the list:** a filter box (Ctrl+F) that narrows the list by name, groups (All, Active, Done, Paused, Problems) with counts, and sorting by any column, remembered between runs.
+- **File priority:** in a torrent's files, set files to **High** to get them first. **First and last pieces first** fetches each file's start and end before the rest, so a video can be previewed while it downloads.
+- **Seeding limits** (Settings → Downloads): stop seeding at a ratio, after a number of hours, or both, then pause the torrent or remove it from the list (its files stay). The list shows each torrent's ratio. A torrent you resume after it stopped keeps seeding.
+- **Notifications** (Settings → Downloads, on by default): a system notification when a download finishes, once its malware scan is done, saying what the scan found. One whose name looks like a disguised program says to check it before opening, whatever the scan says.
+
 ## [0.2.42] - 2026-11-07
 
 ### Added

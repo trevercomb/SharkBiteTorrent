@@ -12,15 +12,16 @@ import (
 // announceFinished shows a system notification that a download finished,
 // with what the malware scan found (Settings.NotifyFinished). It runs once
 // its checks are done, so it doesn't say "ready" about a file that turns
-// out to hold a threat.
-func (a *App) announceFinished(name string, rec *scanRecord) {
+// out to hold a threat. disguised: its names look like a disguised program
+// (scan.Inspect), which a clean scan doesn't clear.
+func (a *App) announceFinished(name string, rec *scanRecord, disguised bool) {
 	a.mu.Lock()
 	on := a.settings.NotifyFinished
 	a.mu.Unlock()
 	if !on {
 		return
 	}
-	title, body := finishedMessage(name, rec)
+	title, body := finishedMessage(name, rec, disguised)
 	go func() { // on macOS the first one can wait for the user to allow them
 		if err := a.notify(title, body); err != nil {
 			notifyFailed.Do(func() {
@@ -33,10 +34,12 @@ func (a *App) announceFinished(name string, rec *scanRecord) {
 // notifyFailed: a failure is logged once, not for every download.
 var notifyFailed sync.Once
 
-func finishedMessage(name string, rec *scanRecord) (title, body string) {
+func finishedMessage(name string, rec *scanRecord, disguised bool) (title, body string) {
 	switch {
 	case len(rec.Threats) > 0:
 		return "⚠ Threat found", fmt.Sprintf("%s found a threat in “%s”. Don't open its files.", rec.Engine, name)
+	case disguised:
+		return "⚠ Check before opening", fmt.Sprintf("“%s” finished, but it looks like a disguised program. Check its warning in the app before opening it.", name)
 	case rec.SFV != nil && len(rec.SFV.Bad) > 0:
 		return "⚠ Download finished with errors", fmt.Sprintf("“%s”: some files don't match its .sfv checksums.", name)
 	case rec.Clean && len(rec.TooLarge) > 0:

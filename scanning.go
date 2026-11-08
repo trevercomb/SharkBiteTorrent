@@ -137,7 +137,7 @@ func (a *App) checkFinished(ctx context.Context, eng *engine.Engine, t engine.St
 			"⚠ “%s”: %d file(s) don't match the torrent's .sfv checksums: %v", t.Name, len(sfvRes.Bad), sfvRes.Bad))
 	}
 	a.warnThreats(t.Name, rec)
-	a.announceFinished(t.Name, rec)
+	a.announceFinished(t.Name, rec, len(t.Warnings) > 0)
 }
 
 // runScan scans p with the antivirus into rec, showing the torrent as
