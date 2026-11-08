@@ -192,7 +192,10 @@ jobs:
           path: dist/*.msix
 
   macos:
-    runs-on: macos-26
+    # macOS 27 with Xcode 27 (preview image): built with the macOS 26 SDK,
+    # 0.2.42-beta.5 didn't find Tailscale on macOS 27 while local builds
+    # with the 27 SDK did (same code, Go and flags).
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -244,7 +247,7 @@ jobs:
         include:
           - { os: windows-2025, cgo: "0", goflags: "" } # release builds for Windows are pure Go
           - { os: ubuntu-22.04, cgo: "1", goflags: "-tags=webkit2_41" } # as the Linux release is built
-          - { os: macos-26, cgo: "1", goflags: "" }
+          - { os: xcode-27, cgo: "1", goflags: "" } # as the macOS release is built
     runs-on: ${{ matrix.os }}
     # bash everywhere: PowerShell doesn't stop when a command fails, so a
     # multi-command step only failed if its LAST command did (Windows test

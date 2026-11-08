@@ -292,3 +292,30 @@ func TestUnseenProcesses(t *testing.T) {
 		t.Errorf("unresolved: %v", got)
 	}
 }
+
+// On the day the clocks go back, a packet's time must match the DNS log's
+// reading of the same clock time (2026-11-01: midnight plus 2h40m is
+// 01:40 EST, not 02:40).
+func TestWallTimeOnClockChange(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no time zone data:", err)
+	}
+	old := time.Local
+	time.Local = ny
+	t.Cleanup(func() { time.Local = old })
+
+	day := time.Date(2026, 11, 1, 0, 0, 0, 0, ny)
+	now := time.Date(2026, 11, 1, 2, 44, 0, 0, ny)
+	got := wallTime(day, "02:40:56.229000", now)
+	want, _ := time.ParseInLocation("2006-01-02 15:04:05.000", "2026-11-01 02:40:56.229", ny) // as the DNS log is read
+	if !got.Equal(want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	// A time more than 12 hours before now is the next day's (a run that
+	// passed midnight).
+	late := time.Date(2026, 11, 1, 23, 59, 0, 0, ny)
+	if got := wallTime(day, "00:01:00.000000", late.Add(13*time.Hour)); got.Day() != 2 || got.Hour() != 0 {
+		t.Errorf("after midnight: got %v", got)
+	}
+}

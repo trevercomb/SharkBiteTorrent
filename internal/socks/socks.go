@@ -29,6 +29,12 @@ type Server struct {
 	// browser window's proxy only serves the app's own WebView2 processes).
 	Allow func(net.Conn) bool
 	Dial  Dialer
+	// Open, if set, opens each connection instead of Dial, once the client
+	// has sent its first bytes (which Open sees): the browser window's proxy
+	// checks a site's certificates itself, and connects to the server it
+	// checked, before WebKit sees anything. The client is told the
+	// connection is up before that, so a refusal or a failure closes it.
+	Open func(ctx context.Context, target string, first []byte) (net.Conn, error)
 
 	// Requests counts CONNECT requests from clients that logged in, so the
 	// app can confirm a search server really sends its traffic through here.
@@ -109,19 +115,49 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	up, err := s.Dial(ctx, "tcp", target)
-	cancel()
-	if err != nil {
-		reply(c, repUnreachable)
-		return
+	var up net.Conn
+	if s.Open == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		up, err = s.Dial(ctx, "tcp", target)
+		cancel()
+		if err != nil {
+			reply(c, repUnreachable)
+			return
+		}
+		defer up.Close()
+		if reply(c, repOK) != nil {
+			return
+		}
+	} else {
+		// Clients send their first bytes only once they're told the
+		// connection is up. A browser may open one ahead of need and leave it
+		// idle for a while (2 minutes here). TLS's first record needs at
+		// least 3 bytes to be told from anything else.
+		if reply(c, repOK) != nil {
+			return
+		}
+		buf := make([]byte, 16<<10)
+		c.SetDeadline(time.Now().Add(2 * time.Minute))
+		n, err := io.ReadAtLeast(c, buf, 3)
+		if err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		up, err = s.Open(ctx, target, buf[:n])
+		cancel()
+		if err != nil {
+			return
+		}
+		defer up.Close()
+		if n >= minRequest {
+			s.Sent.Add(int64(n))
+		}
+		if _, err := up.Write(buf[:n]); err != nil {
+			return
+		}
 	}
-	defer up.Close()
 	s.track(up, true)
 	defer s.track(up, false)
-	if reply(c, repOK) != nil {
-		return
-	}
 	c.SetDeadline(time.Time{})
 
 	done := make(chan struct{}, 2)

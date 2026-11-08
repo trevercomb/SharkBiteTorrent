@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shark BiteTorrent leak test</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 40em; margin: 2em auto; padding: 0 16px; color: #1b1f24; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #e6e8eb; background: #16181c; } a { color: #8ab4f8; } }
+</style>
+</head>
+<body>
+<h1>Shark BiteTorrent leak test</h1>
+<p>This page is for the app's release leak test (<code>go run ./cmd/leakcheck -app</code>, see RELEASING.md). Paste this page's address in <b>Paste links</b>, tick the one link it finds and add it: the app opens it in its browser window, which tries everything that window should block or keep inside the VPN, then downloads a small test file.</p>
+<p><a href="probe.html">Leak test page</a></p>
+</body>
+</html>

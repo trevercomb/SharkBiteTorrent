@@ -194,16 +194,27 @@
 
   // Where to save what's being added. With "Ask where to save each
   // download" on, the dialog asks (null: cancelled); otherwise the default.
-  let asking = $state<{ what: string; resolve: (c: main.AddChoice | null) => void } | null>(null)
+  // Questions asked while one is showing (a dropped file while Paste links
+  // asks) wait their turn rather than replacing it, which lost an add.
+  type Ask = { what: string; resolve: (c: main.AddChoice | null) => void }
+  let asking = $state<Ask | null>(null)
+  const askQueue: Ask[] = []
   function askChoice(what: string): Promise<main.AddChoice | null> {
     if (!settings?.askSaveLocation) return Promise.resolve({ dir: '', paused: false } as main.AddChoice)
-    return new Promise(resolve => (asking = { what, resolve }))
+    return new Promise(resolve => {
+      if (asking) askQueue.push({ what, resolve })
+      else asking = { what, resolve }
+    })
   }
-  function answer(c: main.AddChoice | null) {
+  async function answer(c: main.AddChoice | null) {
     const a = asking!
     asking = null
     a.resolve(c)
-    loadSettings() // recent folders, or "don't ask again"
+    await loadSettings() // recent folders, or "don't ask again"
+    const next = askQueue.shift()
+    if (!next) return
+    if (settings?.askSaveLocation) asking = next
+    else next.resolve({ dir: '', paused: false } as main.AddChoice) // "don't ask again" was ticked
   }
 
   const magnetName = (link: string) =>
@@ -403,7 +414,7 @@
 
   function dlStatus(d: main.DownloadStatus): string {
     if (removingNow.has(d.id)) return 'Removing…'
-    if (d.state === 'running') return d.offline ? 'Waiting for the VPN' : 'Downloading'
+    if (d.state === 'running') return d.waiting ? 'Waiting for its folder' : d.offline ? 'Waiting for the VPN' : 'Downloading'
     if (d.state === 'needsLink') return '⚠ Needs a new link'
     if (d.state === 'failed') return '⚠ Failed'
     if (d.state === 'done') {
@@ -419,7 +430,7 @@
 
   // The status cell's tooltip: the error, or what the scan found.
   function dlStatusTitle(d: main.DownloadStatus): string {
-    if (d.state !== 'done') return d.error
+    if (d.state !== 'done') return d.waiting || d.error
     switch (d.scan) {
       case 'clean': return `Scanned with ${d.scanEngine}: no known threats.`
       case 'threat': return `${d.scanEngine} found: ${d.threats.join(', ')}. Don't open it unless you're sure it's a false alarm.`
@@ -702,6 +713,8 @@
                 <td class="name" title={d.name}>
                   {#if d.scan === 'threat' || (d.scan === 'gone' && d.threats.length)}
                     <span class="flag threat" title="{d.scanEngine} found: {d.threats.join(', ')}">⚠</span>
+                  {:else if (d.warnings ?? []).length > 0}
+                    <span class="flag caution" title={(d.warnings ?? []).map(w => w.reason).join('\n')}>⚠</span>
                   {/if}
                   {d.name || 'Starting…'}
                 </td>

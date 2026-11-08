@@ -36,6 +36,13 @@ static gboolean deny_all(WebKitWebView *v, WebKitPolicyDecision *dec, WebKitPoli
 	return TRUE;
 }
 
+// Location, camera, notifications and the like: refused before anything
+// asks the system (GeoClue would look the location up outside the VPN).
+static gboolean deny_permission(WebKitWebView *v, WebKitPermissionRequest *r, gpointer d) {
+	webkit_permission_request_deny(r);
+	return TRUE;
+}
+
 static gboolean drop_standin(gpointer w) {
 	gtk_widget_destroy(GTK_WIDGET(w));
 	g_object_unref(w);
@@ -118,6 +125,49 @@ static void on_destroy(GtkWidget *w, gpointer d) {
 	gtk_main_quit();
 }
 
+// What the window never loads, as on macOS (window_darwin.m): anything on
+// this computer or the home network (WebKitGTK sends them to the proxy,
+// which refuses them, but that's not something to rely on), and audio or
+// video. WebKit's content blocker rules, compiled once into the profile.
+static const char *block_rules = "["
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://[^/]*\\\\.localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://[^/]*\\\\.local[:/]\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://127\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://0\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://10\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://192\\\\.168\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://169\\\\.254\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://172\\\\.(1[6-9])\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://172\\\\.(2[0-9])\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://172\\\\.(3[01])\\\\.\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://\\\\[\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\".*\",\"resource-type\":[\"media\"]},\"action\":{\"type\":\"block\"}}"
+	"]";
+
+static WebKitUserContentFilter *rules_filter;
+static gboolean rules_done;
+
+static void rules_saved(GObject *store, GAsyncResult *res, gpointer d) {
+	rules_filter = webkit_user_content_filter_store_save_finish(WEBKIT_USER_CONTENT_FILTER_STORE(store), res, NULL);
+	rules_done = TRUE;
+}
+
+// load_rules compiles the block rules (on this thread, before anything
+// loads); NULL if they didn't compile.
+static WebKitUserContentFilter *load_rules(const char *datadir) {
+	char *path = g_build_filename(datadir, "content-filters", NULL);
+	WebKitUserContentFilterStore *store = webkit_user_content_filter_store_new(path);
+	g_free(path);
+	GBytes *src = g_bytes_new_static(block_rules, strlen(block_rules));
+	rules_done = FALSE;
+	webkit_user_content_filter_store_save(store, "sharkbite-browser-window", src, NULL, rules_saved, NULL);
+	while (!rules_done) g_main_context_iteration(NULL, TRUE);
+	g_bytes_unref(src);
+	g_object_unref(store);
+	return rules_filter;
+}
+
 static int open_window(const char *proxy, const char *datadir, const char *title) {
 	g_set_prgname("sharkbitetorrent"); // the app's icon (the Wayland app ID names its menu entry)
 	if (!gtk_init_check(NULL, NULL)) return 0;
@@ -138,6 +188,14 @@ static int open_window(const char *proxy, const char *datadir, const char *title
 	g_signal_connect(ctx, "download-started", G_CALLBACK(on_download_started), NULL);
 
 	view = WEBKIT_WEB_VIEW(webkit_web_view_new_with_context(ctx));
+	WebKitUserContentFilter *rules = load_rules(datadir);
+	if (!rules) {
+		g_object_unref(g_object_ref_sink(view));
+		view = NULL;
+		return 0;
+	}
+	webkit_user_content_manager_add_filter(webkit_web_view_get_user_content_manager(view), rules);
+	webkit_user_content_filter_unref(rules);
 	WebKitSettings *s = webkit_web_view_get_settings(view);
 	// Nothing that could look names up or connect around the proxy.
 	// Deprecated since WebKit 2.48 (may do nothing now); the Linux leak
@@ -147,6 +205,13 @@ static int open_window(const char *proxy, const char *datadir, const char *title
 	G_GNUC_END_IGNORE_DEPRECATIONS
 	webkit_settings_set_enable_webrtc(s, FALSE);
 	webkit_settings_set_enable_media_stream(s, FALSE);
+	// No audio or video at all (as on macOS): a download page needs none,
+	// and an <audio> element made WebKit set up GStreamer, which hung the
+	// page where GStreamer's audio output plugin isn't installed.
+	webkit_settings_set_enable_media(s, FALSE);
+	webkit_settings_set_enable_webaudio(s, FALSE);
+	webkit_settings_set_enable_mediasource(s, FALSE);
+	webkit_settings_set_enable_encrypted_media(s, FALSE);
 	// Pop-ups reach on_create (which never opens one): refused outright, an
 	// ad script that hijacks the download button's click to open one keeps
 	// retrying on every click.
@@ -158,6 +223,7 @@ static int open_window(const char *proxy, const char *datadir, const char *title
 	g_signal_connect(view, "load-changed", G_CALLBACK(on_load_changed), NULL);
 	g_signal_connect(view, "create", G_CALLBACK(on_create), NULL);
 	g_signal_connect(view, "decide-policy", G_CALLBACK(on_decide_policy), NULL);
+	g_signal_connect(view, "permission-request", G_CALLBACK(deny_permission), NULL);
 
 	win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	gtk_window_set_title(GTK_WINDOW(win), title);

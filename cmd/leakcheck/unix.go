@@ -35,6 +35,12 @@ type flow struct {
 	// knows the process and the time: "not from the app's main process",
 	// "not while connecting"). Linux can't tell, and leaves it empty.
 	notDocumented string
+	// who sent it, where the OS says ("SharkBiteTorrent PID 812"; macOS).
+	who string
+	// byConn: untagged packets counted as the app's only because another
+	// packet of their connection was (macOS). On a connection to a local
+	// service, those may be the service's replies.
+	byConn bool
 }
 
 func (f flow) to() string { return net.JoinHostPort(f.dst, strconv.Itoa(f.dport)) }
@@ -209,10 +215,11 @@ func classify(flows []flow, p policy) (list, allowed []string, counted, tunnel i
 	// packets, i.e. both ends are watched processes: the app's file-host
 	// window talking to the app's own proxy, say. A local service outside
 	// the app (a system proxy) sends nothing that's counted, so traffic to
-	// it still shows up below.
+	// it still shows up below. Packets the app was only credited with by
+	// their connection (macOS) don't count: they may be that service's.
 	sent := map[string]bool{}
 	for _, f := range flows {
-		if f.proto == "tcp" {
+		if f.proto == "tcp" && !f.byConn {
 			sent[net.JoinHostPort(f.src, strconv.Itoa(f.sport))+">"+f.to()] = true
 		}
 	}
@@ -252,7 +259,13 @@ func classify(flows []flow, p policy) (list, allowed []string, counted, tunnel i
 		case p.local[f.dst] || net.ParseIP(f.dst).IsLoopback():
 			// Anything else on this computer: a system proxy or DNS forwarder
 			// listening there would pass traffic on outside the tunnel.
-			add(strings.ToUpper(f.proto)+" to "+f.to()+" (a service on this computer other than your search server)", f.packets)
+			// Which process and port: a reply from one of the app's ports to a
+			// client outside it looks the same as the app connecting out.
+			from := fmt.Sprintf(", from port %d", f.sport)
+			if f.who != "" {
+				from += " by " + f.who
+			}
+			add(strings.ToUpper(f.proto)+" to "+f.to()+" (a service on this computer other than your search server"+from+")", f.packets)
 		default:
 			text := strings.ToUpper(f.proto) + " to " + f.dst
 			if f.proto == "tcp" || f.proto == "udp" {

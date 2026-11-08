@@ -424,3 +424,69 @@ func TestUnsafeSavedName(t *testing.T) {
 		}
 	}
 }
+
+// Without a recorded identity, "remove with the file" deletes a finished
+// file only if it still looks like the download: not another file put there
+// under its name since.
+func TestRemoveWithoutIdentity(t *testing.T) {
+	dir := t.TempDir()
+	m := newManager(nil)
+	defer m.Close()
+	os.WriteFile(filepath.Join(dir, "a.iso"), make([]byte, 10), 0o644)
+	m.Add(Spec{ID: "a", URL: "http://x.invalid/a.iso", Dir: dir, Name: "a.iso", Size: 10, Done: true})
+	if err := m.Remove("a", true); err != nil {
+		t.Fatalf("same size: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.iso")); !os.IsNotExist(err) {
+		t.Error("same size: not deleted")
+	}
+	os.WriteFile(filepath.Join(dir, "b.iso"), make([]byte, 99), 0o644)
+	m.Add(Spec{ID: "b", URL: "http://x.invalid/b.iso", Dir: dir, Name: "b.iso", Size: 10, Done: true})
+	if err := m.Remove("b", true); err == nil {
+		t.Error("another file under its name: deleted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.iso")); err != nil {
+		t.Errorf("another file under its name: %v", err)
+	}
+}
+
+// A file replaced on the server (same size, new contents) while a download
+// was paused isn't stitched together from both: the download fails.
+func TestFileChangedOnServer(t *testing.T) {
+	old, repl := testData(t, 400<<10), testData(t, 400<<10)
+	repl[0]++
+	var current atomic.Pointer[[]byte]
+	current.Store(&old)
+	var delay atomic.Int64
+	delay.Store(int64(5 * time.Millisecond))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data := *current.Load()
+		tag := `"old"`
+		if &data[0] == &repl[0] {
+			tag = `"new"`
+		}
+		w.Header().Set("ETag", tag)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if delay.Load() > 0 {
+			w = &slowWriter{ResponseWriter: w, delay: time.Duration(delay.Load())}
+		}
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(data))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	m := newManager(nil)
+	defer m.Close()
+	m.Add(Spec{ID: "a", URL: srv.URL + "/f.bin", Dir: dir})
+	deadline := time.Now().Add(10 * time.Second)
+	for m.Statuses()[0].Have == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	m.Pause("a")
+	current.Store(&repl)
+	delay.Store(0)
+	m.Resume("a")
+	st := waitState(t, m, "a", Failed)
+	if !strings.Contains(st.Error, "isn't the one this download started with") {
+		t.Errorf("error %q", st.Error)
+	}
+}

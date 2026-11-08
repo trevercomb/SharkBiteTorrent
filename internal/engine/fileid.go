@@ -73,3 +73,26 @@ func parseIdentity(s string) (fileIdentity, error) {
 	}
 	return fileIdentity{index, created}, nil
 }
+
+// FileID is the identity of the file at path, to tell it later from another
+// file put at the same path (direct downloads use it; see SameFileID).
+func FileID(path string) (string, error) {
+	id, err := identityOf(path)
+	if err != nil {
+		return "", err
+	}
+	if !id.known() {
+		return "", fmt.Errorf("%s: this drive doesn't tell files apart", path)
+	}
+	return id.String(), nil
+}
+
+// SameFileID reports whether the file at path is the one FileID identified.
+func SameFileID(id, path string) bool {
+	want, err := parseIdentity(id)
+	if err != nil {
+		return false
+	}
+	got, err := identityOf(path)
+	return err == nil && want.same(got)
+}

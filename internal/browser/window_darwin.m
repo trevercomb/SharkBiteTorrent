@@ -18,12 +18,34 @@ void sbw_wakeup(void) { dispatch_async_f(dispatch_get_main_queue(), NULL, run_qu
 
 static char *cstr(NSString *s) { return (char *)(s ? s.UTF8String : ""); }
 
-// Every navigation in a pop-up's stand-in is refused (nothing loads).
+// Certificates are checked without going online: macOS would otherwise
+// fetch revocation data or missing certificates itself, outside the VPN
+// (as the app's own connections never do; a server that doesn't send its
+// full chain fails, as it does for the app).
+static void checkOffline(NSURLAuthenticationChallenge *ch, void (^h)(NSURLSessionAuthChallengeDisposition, NSURLCredential *)) {
+	if (![ch.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
+		h(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+		return;
+	}
+	SecTrustRef trust = ch.protectionSpace.serverTrust;
+	if (!trust || SecTrustSetNetworkFetchAllowed(trust, false) != errSecSuccess || !SecTrustEvaluateWithError(trust, NULL)) {
+		h(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
+		return;
+	}
+	h(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:trust]);
+}
+
+// Every navigation in a pop-up's stand-in is refused (nothing loads). A page
+// can still write into it (an image in its blank document): its
+// certificates are checked offline too.
 @interface SBDenyAll : NSObject <WKNavigationDelegate>
 @end
 @implementation SBDenyAll
 - (void)webView:(WKWebView *)v decidePolicyForNavigationAction:(WKNavigationAction *)a decisionHandler:(void (^)(WKNavigationActionPolicy))h {
 	h(WKNavigationActionPolicyCancel);
+}
+- (void)webView:(WKWebView *)v didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)ch completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))h {
+	checkOffline(ch, h);
 }
 @end
 static SBDenyAll *denyAll;
@@ -88,21 +110,8 @@ static SBDenyAll *denyAll;
 	h([dir URLByAppendingPathComponent:n]);
 }
 
-// Certificates are checked without going online: macOS would otherwise
-// fetch revocation data or missing certificates itself, outside the VPN
-// (as the app's own connections never do; a server that doesn't send its
-// full chain fails, as it does for the app).
 - (void)webView:(WKWebView *)v didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)ch completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition, NSURLCredential *))h {
-	if (![ch.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
-		h(NSURLSessionAuthChallengePerformDefaultHandling, nil);
-		return;
-	}
-	SecTrustRef trust = ch.protectionSpace.serverTrust;
-	if (!trust || SecTrustSetNetworkFetchAllowed(trust, false) != errSecSuccess || !SecTrustEvaluateWithError(trust, NULL)) {
-		h(NSURLSessionAuthChallengeCancelAuthenticationChallenge, nil);
-		return;
-	}
-	h(NSURLSessionAuthChallengeUseCredential, [NSURLCredential credentialForTrust:trust]);
+	checkOffline(ch, h);
 }
 
 // A pop-up the page asked for: reported, and nothing opens. The page gets a
@@ -125,6 +134,12 @@ static SBDenyAll *denyAll;
 @end
 static SBBrowserDelegate *delegate;
 
+// To the front: since macOS 14 only once the app has let it (Show).
+static void activate(void) {
+	if (@available(macOS 14.0, *)) [NSApp activate];
+	else [NSApp activateIgnoringOtherApps:YES];
+}
+
 // What the window never loads: anything on this computer or the local
 // network (the proxy would send it into the VPN, where it can't be reached,
 // but WebKit may not send it to the proxy at all), and audio or video,
@@ -132,6 +147,7 @@ static SBBrowserDelegate *delegate;
 static NSString *const blockRules = @"["
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://[^/]*\\\\.localhost[:/]\"},\"action\":{\"type\":\"block\"}},"
+	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://[^/]*\\\\.local[:/]\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://127\\\\.\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://0\\\\.\"},\"action\":{\"type\":\"block\"}},"
 	"{\"trigger\":{\"url-filter\":\"^[a-z-]+://10\\\\.\"},\"action\":{\"type\":\"block\"}},"
@@ -198,6 +214,12 @@ int sbw_open_window(const char *proxy, const char *user, const char *pass, const
 		((void (*)(id, SEL, BOOL))objc_msgSend)(c.preferences, noRTC, NO);
 		[c.userContentController addUserScript:[[WKUserScript alloc] initWithSource:noRTCScript
 			injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO]];
+		// No DNS prefetching either: the proxy doesn't cover it if WebKit
+		// decides from the system's proxy settings. Its own switch again;
+		// the leak test (with the test page) is what shows it holds.
+		SEL noPrefetch = NSSelectorFromString(@"_setDNSPrefetchingEnabled:");
+		if ([c.preferences respondsToSelector:noPrefetch])
+			((void (*)(id, SEL, BOOL))objc_msgSend)(c.preferences, noPrefetch, NO);
 		// The block rules, compiled before anything loads (the answer comes
 		// on this thread, so it's waited for here).
 		__block WKContentRuleList *rules = nil;
@@ -226,7 +248,7 @@ int sbw_open_window(const char *proxy, const char *user, const char *pass, const
 		win.delegate = delegate;
 		[win center];
 		[win makeKeyAndOrderFront:nil];
-		[NSApp activateIgnoringOtherApps:YES];
+		activate();
 		return 0;
 	}
 	return 1;
@@ -266,6 +288,6 @@ void sbw_set_title(const char *t) { if (win) win.title = @(t); }
 void sbw_present(void) {
 	if (!win) return;
 	[win makeKeyAndOrderFront:nil];
-	[NSApp activateIgnoringOtherApps:YES];
+	activate();
 }
 void sbw_close_window(void) { if (win) [win close]; }

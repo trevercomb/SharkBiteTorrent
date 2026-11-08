@@ -22,6 +22,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/time/rate"
 
 	"sharkbite/internal/engine"
 	"sharkbite/internal/platform"
@@ -97,6 +98,8 @@ type App struct {
 	verifyCtx    context.Context               // cancelled on disconnect; stops "Verify files"
 	dl           *downloads                    // direct downloads (downloads.go); guarded by mu
 	totalsSaved  time.Time                     // when seeding.go last wrote the totals; guarded by mu
+	downLimiter  *rate.Limiter                 // the download speed limit, for torrents and direct downloads together
+	direct       directConns                   // made in "No VPN" mode; closed when the mode changes (directconns.go)
 	dlScanStop   map[string]context.CancelFunc // stops a direct download's running malware scan (downloadscan.go); guarded by mu
 	hostMu       sync.Mutex                    // guards host
 	host         *hostBrowser                  // the file-host browser window, while open (hostpages_*.go)
@@ -229,7 +232,9 @@ func (a *App) startup(ctx context.Context) {
 		}()
 		return
 	}
+	removeStaleTemps(a.configDir)
 	a.loadSettings()
+	a.downLimiter = engine.NewLimiter(a.settings.DownLimitKB * 1024)
 	a.loadSaved()
 	a.startDownloads()
 	a.noteUncleanExit()
@@ -406,6 +411,7 @@ func (a *App) onSecondInstance(data options.SecondInstanceData) {
 type pendingSource struct {
 	src      string
 	external bool
+	choice   *AddChoice // where the user chose to save it, if asked
 }
 
 // handleArgs adds magnet links and .torrent files passed on the command line,
@@ -431,7 +437,7 @@ func (a *App) handleArgs(args []string, external bool) {
 		a.mu.Lock()
 		ready := a.eng != nil
 		if !ready {
-			a.pending = append(a.pending, pendingSource{arg, external})
+			a.pending = append(a.pending, pendingSource{src: arg, external: external})
 		}
 		a.mu.Unlock()
 		if ready {
@@ -681,7 +687,8 @@ func (a *App) connectPrepared(prep *preparedConn) {
 		ForwardedPort: port,
 		DownLimit:     set.DownLimitKB * 1024,
 		UpLimit:       set.UpLimitKB * 1024,
-		StateDir:      a.configDir, // download progress database
+		Down:          a.downLimiter, // shared with direct downloads
+		StateDir:      a.configDir,   // download progress database
 	})
 	if err != nil {
 		tun.Close()
@@ -707,12 +714,14 @@ func (a *App) connectDirect(set Settings) {
 	eng, err := engine.New(nil, engine.Options{
 		DownLimit: set.DownLimitKB * 1024,
 		UpLimit:   set.UpLimitKB * 1024,
+		Down:      a.downLimiter,
 		StateDir:  a.configDir,
 	})
 	if err != nil {
 		a.setVpn(VpnStatus{State: "error", Provider: "none", Name: "No VPN", Error: err.Error()})
 		return
 	}
+	a.direct.allow()
 	a.startEngine(nil, eng, VpnStatus{State: "off", Provider: "none", Name: "No VPN"})
 }
 
@@ -751,7 +760,13 @@ func (a *App) startEngine(tun *tunnel.Tunnel, eng *engine.Engine, st VpnStatus) 
 		}
 	}
 	for _, p := range pending {
-		if err := a.addSourceFrom(p.src, p.external); err != nil {
+		var err error
+		if p.choice != nil {
+			err = a.addSourceTo(p.src, false, *p.choice)
+		} else {
+			err = a.addSourceFrom(p.src, p.external)
+		}
+		if err != nil {
 			a.notifyError(err)
 		}
 	}
@@ -839,6 +854,10 @@ func (a *App) disconnect() {
 	a.eng, a.tun, a.stopMonitor = nil, nil, nil
 	a.mu.Unlock()
 	vpnprov.SetTunnel(nil)
+	// The mode may be changing: nothing stays on the normal connection, and
+	// none is made while the engine shuts down (which takes seconds and
+	// still looks like "No VPN" until the next connection starts).
+	a.direct.closeAll()
 	if stop != nil {
 		stop()
 	}
@@ -849,6 +868,7 @@ func (a *App) disconnect() {
 	if tun != nil {
 		tun.Close()
 	}
+	a.direct.closeAll() // any that slipped in while shutting down
 }
 
 // monitor re-checks the exit IP every minute so the UI reflects reality.
@@ -1089,6 +1109,15 @@ func (a *App) addSourceTo(src string, external bool, choice AddChoice) error {
 		a.saved = append(a.saved, pending)
 		return a.writeSaved()
 	}
+	// Dropped or added while the VPN connects: added once it's up, where the
+	// user chose, as before they were asked.
+	a.mu.Lock()
+	if a.eng == nil {
+		a.pending = append(a.pending, pendingSource{src: src, choice: &choice})
+		a.mu.Unlock()
+		return nil
+	}
+	a.mu.Unlock()
 	eng, err := a.engine()
 	if err != nil {
 		return err
@@ -1099,17 +1128,15 @@ func (a *App) addSourceTo(src string, external bool, choice AddChoice) error {
 	if err := ensureDownloadDir(dir); err != nil {
 		return err
 	}
-	hash, err := eng.Add(engine.AddOptions{Source: src, Dir: dir})
+	// "Add paused" adds it paused, rather than pausing it once it's running.
+	hash, err := eng.Add(engine.AddOptions{Source: src, Dir: dir, Paused: choice.Paused})
 	if err != nil {
 		return err
 	}
-	if err := a.recordAdded(hash, src, dir); err != nil {
+	if err := a.recordAdded(hash, src, dir, choice.Paused); err != nil {
 		return err
 	}
 	a.noteRecentDir(dir)
-	if choice.Paused {
-		return a.setPaused(hash, true, false)
-	}
 	return nil
 }
 
@@ -1173,7 +1200,7 @@ func insideHome(dir string) bool {
 
 // recordAdded saves a torrent the engine has just been given from inside the
 // app (checked: never adopted as an older version's).
-func (a *App) recordAdded(hash, src, dir string) error {
+func (a *App) recordAdded(hash, src, dir string, paused bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for i := range a.saved {
@@ -1183,12 +1210,13 @@ func (a *App) recordAdded(hash, src, dir string) error {
 			// entry already running keeps its own folder, as the engine does.
 			if s := &a.saved[i]; s.Confirm {
 				s.Confirm, s.Checked, s.legacy, s.Dir, s.Source, s.Name, s.Size = false, true, false, dir, src, "", 0
+				s.Paused = paused
 				return a.writeSaved()
 			}
 			return nil
 		}
 	}
-	a.saved = append(a.saved, savedTorrent{Hash: hash, Source: src, Dir: dir, Checked: true})
+	a.saved = append(a.saved, savedTorrent{Hash: hash, Source: src, Dir: dir, Checked: true, Paused: paused})
 	return a.writeSaved()
 }
 
@@ -1581,8 +1609,9 @@ func (a *App) SaveSettings(s Settings) error {
 	}
 	if eng != nil {
 		eng.SetLimits(s.DownLimitKB*1024, s.UpLimitKB*1024)
+	} else if a.downLimiter != nil {
+		engine.SetLimit(a.downLimiter, s.DownLimitKB*1024) // shared with direct downloads, which may run meanwhile
 	}
-	a.setDownloadLimit(s.DownLimitKB)
 	if old.UpdateChannel != s.UpdateChannel && a.ctx != nil {
 		// An update offered on the other channel no longer applies.
 		runtime.EventsEmit(a.ctx, "update-channel-changed")
@@ -1758,11 +1787,36 @@ func writeFile(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// A temporary file of its own: two saves at once (a periodic one and
+	// the one at quitting) can't interleave into a half-written file.
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
+// removeStaleTemps deletes writeFile's temporary files that a crash or a
+// power cut left in dir (only this copy of the app writes there: it runs
+// once it has the single-instance lock).
+func removeStaleTemps(dir string) {
+	old, _ := filepath.Glob(filepath.Join(dir, "*.json.*.tmp"))
+	for _, p := range old {
+		if st, err := os.Lstat(p); err == nil && st.Mode().IsRegular() && time.Since(st.ModTime()) > time.Hour {
+			os.Remove(p)
+		}
+	}
 }
 
 func copyFile(src, dst string) error {

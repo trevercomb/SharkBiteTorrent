@@ -4,13 +4,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -47,19 +48,22 @@ type hostBrowser struct {
 	wake    chan struct{}
 	loaded  chan string
 	caught  chan caughtDownload
-	popups  chan struct{} // a pop-up was blocked (an ad that took the click)
-	stopped bool
+	popups  chan struct{}   // a pop-up was blocked (an ad that took the click)
+	stopped bool            // the app is quitting: closing the window ends everything
+	opts    browser.Options // the window's, to open it again after a skipped page
 }
 
 type caughtDownload struct{ link, disposition string }
 
 const (
-	pageLoadWait   = 45 * time.Second
-	clickTries     = 25 // two steps, clicks taken by ads, and a countdown: one host took 14 tries
-	clickWait      = 3 * time.Second
-	adClickWait    = time.Second // the click only opened an ad: the next one may do more
-	userClickWait  = 3 * time.Minute
-	humanCheckWait = 10 * time.Minute
+	pageLoadWait     = 45 * time.Second
+	clickTries       = 25               // two steps, clicks taken by ads, and a countdown: one host took 14 tries
+	noButtonTries    = 4                // tries in a row that find no button, about 12 s
+	noButtonUserWait = 30 * time.Second // then how long the user has to find one
+	clickWait        = 3 * time.Second
+	adClickWait      = time.Second // the click only opened an ad: the next one may do more
+	userClickWait    = 3 * time.Minute
+	humanCheckWait   = 10 * time.Minute
 )
 
 // clickScript clicks the page's free download link or button: an ordinary
@@ -135,7 +139,7 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		loaded: make(chan string, 8),
 		caught: make(chan caughtDownload, 8),
 		popups: make(chan struct{}, 1),
-		proxy:  &socks.Server{Dial: a.hostDial},
+		proxy:  &socks.Server{Open: (&tlsVetter{dial: a.hostDial}).open}, // see tlsvet.go
 	}
 	o := browser.Options{
 		Proxy:   ln.Addr().String(),
@@ -166,6 +170,7 @@ func (a *App) startHostBrowser() (*hostBrowser, error) {
 		},
 	}
 	browser.GuardProxy(h.proxy, &o)
+	h.opts = o
 	go h.proxy.Serve(ln)
 	h.win, err = browser.Start(a.exe, o)
 	if err != nil {
@@ -192,15 +197,18 @@ func (a *App) hostDial(ctx context.Context, network, addr string) (net.Conn, err
 		return nil, fmt.Errorf("%s is on this computer or the home network", host)
 	}
 	if !a.directMode() {
-		return a.dialTunnel(ctx, network, addr)
-	}
-	d := net.Dialer{Resolver: &net.Resolver{}, Control: func(_, address string, _ syscall.RawConn) error {
-		if h, _, err := net.SplitHostPort(address); err != nil || localHost(h) {
-			return fmt.Errorf("%s is on this computer or the home network", address)
+		a.mu.Lock()
+		tun := a.tun
+		a.mu.Unlock()
+		if tun == nil {
+			return nil, errors.New("VPN not connected")
 		}
-		return nil
-	}}
-	return d.DialContext(ctx, network, addr)
+		if net.ParseIP(host) != nil {
+			return tun.DialContext(ctx, network, addr)
+		}
+		return dialPublic(ctx, tun.Net().LookupContextHost, tun.DialContext, network, addr)
+	}
+	return a.direct.dial(ctx, network, addr, true)
 }
 
 func (a *App) closeHostPages() {
@@ -208,7 +216,11 @@ func (a *App) closeHostPages() {
 	h := a.host
 	a.hostMu.Unlock()
 	if h != nil {
-		h.win.Close() // driveHostBrowser cleans up
+		h.mu.Lock()
+		h.stopped = true // not a skipped page: no window again
+		w := h.win
+		h.mu.Unlock()
+		w.Close() // driveHostBrowser cleans up
 	}
 }
 
@@ -232,6 +244,20 @@ func (a *App) driveHostBrowser(h *hostBrowser) {
 			case <-h.wake:
 				continue
 			case <-time.After(3 * time.Second): // nothing more to do
+				// Unless pages were queued just now: openHostPages queues
+				// with hostMu held, so with it held an empty queue stays
+				// empty, and from here new pages get a window of their own.
+				a.hostMu.Lock()
+				h.mu.Lock()
+				more := len(h.queue) > 0
+				h.mu.Unlock()
+				if !more && a.host == h {
+					a.host = nil
+				}
+				a.hostMu.Unlock()
+				if more {
+					continue
+				}
 				return
 			case <-h.win.Done():
 				return
@@ -245,7 +271,28 @@ func (a *App) driveHostBrowser(h *hostBrowser) {
 		done++
 		status := fmt.Sprintf("Shark BiteTorrent: getting download %d of %d", done, total)
 		h.win.SetTitle(status)
-		if err := a.visitHostPage(h, p, status); err != nil {
+		err := a.visitHostPage(h, p, status)
+		if errors.Is(err, errPageSkipped) {
+			// The user closed the window while it waited on them: that page
+			// is skipped, and the window opens again for the rest.
+			a.notifyError(fmt.Errorf("%s: skipped", paste.WithoutFragments(p.URL)))
+			h.mu.Lock()
+			more := len(h.queue) > 0 && !h.stopped
+			h.mu.Unlock()
+			if !more {
+				return
+			}
+			w, err := browser.Start(a.exe, h.opts)
+			if err != nil {
+				a.notifyError(err)
+				return
+			}
+			h.mu.Lock()
+			h.win = w
+			h.mu.Unlock()
+			continue
+		}
+		if err != nil {
 			select {
 			case <-h.win.Done():
 				h.mu.Lock()
@@ -347,7 +394,14 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 	}
 
 	time.Sleep(1500 * time.Millisecond) // let the page's own scripts set up
+	noButton := 0
 	for range clickTries {
+		// A page with nothing to click at all (no countdown either) isn't
+		// going to grow a button: the user looks, rather than waiting a
+		// minute for the app to give up.
+		if noButton == noButtonTries {
+			break
+		}
 		// A check that wants a human (on loading, or after a "free
 		// download" step): the user does it, in the window, before any click.
 		if err := a.waitForHuman(h, p, status); err != nil {
@@ -363,7 +417,13 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 		case <-h.popups:
 		default:
 		}
-		hostLog(h.win.Query(clickScript)) // diagnosing a page the clicks don't work on
+		r := h.win.Query(clickScript)
+		hostLog(r) // diagnosing a page the clicks don't work on
+		if strings.HasPrefix(r, `"no download button`) {
+			noButton++
+		} else {
+			noButton = 0
+		}
 		select {
 		case d := <-h.caught:
 			a.addFromHost(p, d.link, d.disposition)
@@ -381,21 +441,35 @@ func (a *App) visitHostPage(h *hostBrowser, p hostPage, status string) error {
 		}
 	}
 
-	// The page didn't react to the app's clicks: the user clicks.
-	h.win.SetTitle("Shark BiteTorrent: click this page's download button")
+	// The page didn't react to the app's clicks: the user clicks. A page
+	// with no download button at all likely has nothing to get (it isn't a
+	// file host's page), so it's given up on sooner. Closing the window
+	// now skips just this page.
+	wait, title := userClickWait, "Shark BiteTorrent: click this page's download button, or close this window to skip it"
+	if noButton == noButtonTries {
+		wait = noButtonUserWait
+		title = fmt.Sprintf("Shark BiteTorrent: no download button found. Click one if you see it; otherwise this page is skipped in %d s", int(wait.Seconds()))
+	}
+	h.win.SetTitle(title)
 	h.win.Show()
 	select {
 	case d := <-h.caught:
 		a.addFromHost(p, d.link, d.disposition)
 		return nil
-	case <-time.After(userClickWait):
+	case <-time.After(wait):
+		if noButton == noButtonTries {
+			return fmt.Errorf("%s: no download button on that page, so it was skipped", paste.WithoutFragments(p.URL))
+		}
 		return fmt.Errorf("%s: no download started", paste.WithoutFragments(p.URL))
 	case <-h.win.Done():
-		return errWindowClosed
+		return errPageSkipped
 	}
 }
 
-var errWindowClosed = fmt.Errorf("the download window was closed")
+var (
+	errWindowClosed = errors.New("the download window was closed")
+	errPageSkipped  = errors.New("page skipped")
+)
 
 // browserWindowArg starts the app as the browser window's process.
 const browserWindowArg = browser.HelperArg

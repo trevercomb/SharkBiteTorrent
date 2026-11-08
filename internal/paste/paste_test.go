@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -42,7 +43,7 @@ https://dl.example/archive.7z.001, https://en.wikipedia.org/wiki/Foo_(bar)`
 		t.Fatalf("got %d links, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !reflect.DeepEqual(got[i], want[i]) {
 			t.Errorf("link %d: got %+v, want %+v", i, got[i], want[i])
 		}
 	}
@@ -277,5 +278,63 @@ func TestWithoutFragments(t *testing.T) {
 	want := `Get "https://bin.example/?abc": EOF; see https://x.example/a and http://y.example/`
 	if got := WithoutFragments(in); got != want {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestExpand(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/folder/":
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(`<a href="../">up</a> <a href="a.iso">a</a> <a href="b.iso">b</a> <a href="/about">about</a>`))
+		case "/plain":
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(`<a href="/about">about</a>`))
+		case "/get":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Write([]byte("binary"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	in := []Link{
+		{URL: srv.URL + "/x.zip", Kind: File},
+		{URL: srv.URL + "/folder/", Kind: Page},
+		{URL: srv.URL + "/plain", Kind: Page},
+		{URL: srv.URL + "/get", Kind: Page},
+		{URL: srv.URL + "/host-page", Kind: Page},
+	}
+	got := Expand(t.Context(), srv.Client(), in, 10)
+	if got[0].Kind != File || got[0].Links != nil {
+		t.Errorf("file: %+v", got[0])
+	}
+	if n := len(got[1].Links); n != 2 || got[1].Links[0].URL != srv.URL+"/folder/a.iso" || got[1].Kind != Page {
+		t.Errorf("folder: %+v", got[1])
+	}
+	if got[2].Kind != Page || got[2].Links != nil {
+		t.Errorf("page without downloads: %+v", got[2])
+	}
+	if got[3].Kind != File || got[3].Name != "get" {
+		t.Errorf("file behind a page address: %+v", got[3])
+	}
+	if got[4].Kind != Page || got[4].Links != nil {
+		t.Errorf("unreadable page: %+v", got[4])
+	}
+	if in[1].Links != nil {
+		t.Error("Expand changed its input")
+	}
+	// Only the first max pages are read.
+	if got := Expand(t.Context(), srv.Client(), in, 1); got[3].Kind != Page {
+		t.Errorf("max 1: %+v", got[3])
+	}
+	for in, want := range map[string]bool{
+		"https://a.example/x https://b.example/y": true,
+		"https://a.example/folder/":               false,
+		"just text":                               true,
+	} {
+		if Pasted(in) != want {
+			t.Errorf("Pasted(%q) = %v", in, !want)
+		}
 	}
 }

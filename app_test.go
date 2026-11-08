@@ -102,7 +102,7 @@ func TestAddedTorrentsNeverLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := t.TempDir() // the download folder changed meanwhile
-	if err := a.recordAdded(ih, link, other); err != nil {
+	if err := a.recordAdded(ih, link, other, false); err != nil {
 		t.Fatal(err)
 	}
 	b := &App{configDir: a.configDir} // restart
@@ -267,5 +267,29 @@ func TestAccountKeyIgnoresCache(t *testing.T) {
 	acc.Data["password"] = "q"
 	if accountKey(acc) == k {
 		t.Error("password change not seen")
+	}
+}
+
+// Leftover save files from a crash are removed at startup; a save in
+// progress (a recent one) and other files are left alone.
+func TestRemoveStaleTemps(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "settings.json.123.tmp")
+	recent := filepath.Join(dir, "torrents.json.456.tmp")
+	other := filepath.Join(dir, "notes.tmp")
+	for _, p := range []string{old, recent, other} {
+		os.WriteFile(p, []byte("x"), 0o600)
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(old, past, past)
+	os.Chtimes(other, past, past)
+	removeStaleTemps(dir)
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("old leftover kept")
+	}
+	for _, p := range []string{recent, other} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s removed", filepath.Base(p))
+		}
 	}
 }

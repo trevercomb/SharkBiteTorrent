@@ -145,6 +145,7 @@ func Start(exe string, o Options) (*Remote, error) {
 		r.Close()
 		return nil, errors.New("the browser window didn't open")
 	}
+	r.Show() // in front of the app, which the user is looking at
 	return r, nil
 }
 
@@ -167,11 +168,15 @@ func (r *Remote) read(out *bufio.Reader, ready chan<- error) {
 			r.o.OnClosed()
 		}
 	}()
-	dec := json.NewDecoder(out)
-	for {
+	// One event per line. A line that isn't one is skipped: something in
+	// the helper (GTK, WebKit) printed to its standard output, which would
+	// otherwise end the stream and count the window as gone.
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
 		var e event
-		if err := dec.Decode(&e); err != nil {
-			return
+		if json.Unmarshal(sc.Bytes(), &e) != nil || e.Ev == "" {
+			continue
 		}
 		switch e.Ev {
 		case "ready":
@@ -219,7 +224,10 @@ func (r *Remote) Done() <-chan struct{} { return r.done }
 func (r *Remote) Navigate(url string) { r.send(command{Cmd: "navigate", Arg: url}) }
 func (r *Remote) Eval(js string)      { r.send(command{Cmd: "eval", Arg: js}) }
 func (r *Remote) SetTitle(s string)   { r.send(command{Cmd: "settitle", Arg: s}) }
-func (r *Remote) Show()               { r.send(command{Cmd: "show"}) }
+func (r *Remote) Show() {
+	letForward(r.cmd.Process.Pid)
+	r.send(command{Cmd: "show"})
+}
 
 // DocumentTitle is the page's <title> ("" if the window is gone or slow).
 func (r *Remote) DocumentTitle() string { return r.ask(command{Cmd: "title"}) }

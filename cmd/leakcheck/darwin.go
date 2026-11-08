@@ -287,7 +287,7 @@ func runDarwin(secs int, selftest, app bool, exe, endpointFlag, childWarp string
 	}
 
 	if app {
-		fmt.Printf("Started Shark BiteTorrent (PID %d); watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); click Check for updates; and paste https://example.com/ in Paste links (its \"getting downloads\" window opens: let the page load, then close it).\n", root, secs)
+		fmt.Printf("Started Shark BiteTorrent (PID %d); watching it for %d seconds.\nYOU: leave the window alone for the first minute (that covers startup). Then: search and add a result; type or paste in the magnet box; open every Settings section (type in a text field, click through VPN providers without saving); turn the search proxy on and click Check it's working (then off again if you don't use it); switch to another VPN provider and save, then back (that covers reconnecting); click Check for updates; and paste https://trevercomb.github.io/SharkBiteTorrent/leaktest/ in Paste links, tick the link it finds (Leak test page) and add it: its browser window opens the page by itself, and after about 10 seconds the small file sbt-leaktest.bin appears in your downloads (that shows the page ran; remove it afterwards).\n", root, secs)
 		select {
 		case err := <-exited:
 			out, _ := os.ReadFile(appLog.Name())
@@ -1063,15 +1063,20 @@ func (r *pktapResult) add(line string) {
 
 // timeOf turns tcpdump's time of day into a time on the run's date (a run
 // that passes midnight continues on the next day).
-func (r *pktapResult) timeOf(hms string) time.Time {
+func (r *pktapResult) timeOf(hms string) time.Time { return wallTime(r.day, hms, time.Now()) }
+
+// wallTime is the clock time hms on day, read as the DNS log's times are
+// (time.Local), so the two compare. Not midnight plus that many hours: on
+// the days the clocks change, that's an hour off the clock, and every
+// packet then fell an hour away from the lookups and connect windows.
+func wallTime(day time.Time, hms string, now time.Time) time.Time {
 	t, err := time.ParseInLocation("15:04:05.000000", hms, time.Local)
 	if err != nil {
 		return time.Time{}
 	}
-	at := r.day.Add(time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute +
-		time.Duration(t.Second())*time.Second + time.Duration(t.Nanosecond()))
-	if at.Before(time.Now().Add(-12 * time.Hour)) {
-		at = at.Add(24 * time.Hour)
+	at := time.Date(day.Year(), day.Month(), day.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
+	if at.Before(now.Add(-12 * time.Hour)) {
+		at = time.Date(day.Year(), day.Month(), day.Day()+1, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
 	}
 	return at
 }
@@ -1232,11 +1237,12 @@ func (r *pktapResult) forWatched(w *macWatch, local map[string]bool, mdns map[in
 		c := connOf(k)
 		untaggedish := (k.proc == 0 || k.proc == kernelPID) && k.eproc == 0
 		pid := 0
+		byConn := false
 		switch {
 		case w.has(k.proc) || w.has(k.eproc):
 			pid = watchedPID(w, k)
 		case untaggedish && owner[c] != 0:
-			pid = owner[c]
+			pid, byConn = owner[c], true
 			u.rescued += s.n
 		case untaggedish && (k.proto == "tcp" || k.proto == "udp") && w.portPID(k.proto, k.sport) != 0:
 			pid = w.portPID(k.proto, k.sport)
@@ -1262,7 +1268,8 @@ func (r *pktapResult) forWatched(w *macWatch, local map[string]bool, mdns map[in
 		default:
 			continue // someone else's
 		}
-		f := flow{proto: k.proto, src: k.src, dst: k.dst, sport: k.sport, dport: k.dport, packets: s.n}
+		f := flow{proto: k.proto, src: k.src, dst: k.dst, sport: k.sport, dport: k.dport, packets: s.n,
+			who: fmt.Sprintf("%s PID %d", clientName(r, pid), pid), byConn: byConn}
 		switch {
 		case pid != root:
 			f.notDocumented = "not from the app's main process"
