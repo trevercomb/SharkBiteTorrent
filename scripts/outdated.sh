@@ -5,7 +5,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-echo "== Go modules used directly (patched copies in third_party excluded)"
+echo "== Go modules used directly (the patched copy in third_party excluded)"
 go list -m -u -f '{{if and (not .Indirect) .Update (not .Replace)}}  {{.Path}} {{.Version}} -> {{.Update.Version}}{{end}}' all | grep -v '^$' || echo "  all current"
 
 echo "== Go toolchain"
@@ -26,8 +26,8 @@ echo "  workflows: $pinned, go.mod: $(go list -m -f '{{.Version}}' github.com/wa
 echo "== go-webview2 (our patched copy in third_party; re-apply the patch to update)"
 echo "  ours: $(go list -m -f '{{.Version}}' github.com/wailsapp/go-webview2), upstream: $(go list -m -f '{{.Version}}' github.com/wailsapp/go-webview2@latest 2>/dev/null || echo '?')"
 
-echo "== anacrolix/torrent (our patched copy in third_party for GHSA-2wrx-84qj-4pcg; see its PATCHED.md to drop it)"
-echo "  ours: $(go list -m -f '{{.Version}}' github.com/anacrolix/torrent) + fix 76452a2c8a2f, upstream: $(go list -m -f '{{.Version}}' github.com/anacrolix/torrent@latest 2>/dev/null || echo '?')"
+echo "== anacrolix/torrent (an untagged upstream commit until a release after v1.61.0: newer commits aren't listed above; move to a tagged release when there is one)"
+echo "  ours: $(go list -m -f '{{.Version}}' github.com/anacrolix/torrent), latest tag: $(go list -m -f '{{.Version}}' github.com/anacrolix/torrent@latest 2>/dev/null || echo '?')"
 
 echo "== Frontend (npm)"
 (cd frontend && npm outdated) || true

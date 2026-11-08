@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	g "github.com/anacrolix/generics"
+
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 )
@@ -73,7 +75,7 @@ func TestAnyComplete(t *testing.T) {
 	pc := storage.NewMapPieceCompletion()
 	info := &metainfo.Info{PieceLength: 10, Pieces: make([]byte, 20*5), Length: 50}
 	ih := hashN(4)
-	pc.Set(metainfo.PieceKey{InfoHash: ih, Index: 2}, true) // bytes 20-29
+	pc.Set(metainfo.PieceKey{InfoHash: ih, Index: 2}, g.Some(true)) // bytes 20-29
 	if !anyComplete(pc, ih, info, 25, 10) {
 		t.Error("piece 2 overlaps [25,35)")
 	}

@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode"
 
+	g "github.com/anacrolix/generics"
+
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/segments"
 	"github.com/anacrolix/torrent/storage"
@@ -751,7 +753,7 @@ func (t *fileTorrent) writeFinished(bufs map[int]*pieceBuf, deadline time.Time) 
 			n += e.Length
 		}
 		if ok {
-			t.pc.Set(metainfo.PieceKey{InfoHash: t.ih, Index: idx}, true)
+			t.pc.Set(metainfo.PieceKey{InfoHash: t.ih, Index: idx}, g.Some(true))
 		}
 	}
 }
@@ -983,7 +985,7 @@ func (p *filePiece) MarkComplete() error {
 	p.t.mu.Lock()
 	delete(p.t.readFailed, idx)
 	p.t.mu.Unlock()
-	return p.t.pc.Set(p.key(), true)
+	return p.t.pc.Set(p.key(), g.Some(true))
 }
 
 func (p *filePiece) MarkNotComplete() error {
@@ -1016,7 +1018,7 @@ func (p *filePiece) MarkNotComplete() error {
 	if p.t.store.Unavailable() != nil {
 		return nil
 	}
-	return p.t.pc.Set(p.key(), false)
+	return p.t.pc.Set(p.key(), g.Some(false))
 }
 
 // Completion trusts the database, but double-checks that the files covering

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	g "github.com/anacrolix/generics"
+
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 )
@@ -133,8 +135,8 @@ func TestUnreadablePieceKeepsRecord(t *testing.T) {
 	}
 	defer impl.Close()
 	key := func(i int) metainfo.PieceKey { return metainfo.PieceKey{InfoHash: hashN(7), Index: i} }
-	pc.Set(key(0), true)
-	pc.Set(key(1), true)
+	pc.Set(key(0), g.Some(true))
+	pc.Set(key(1), g.Some(true))
 
 	stop := st.startFailLog()
 	st.ft.mu.Lock()
@@ -178,7 +180,7 @@ func TestOldReadErrorDoesNotHideDamage(t *testing.T) {
 	f, _ := st.ft.acquire(0, true)
 	st.ft.release(0, f)
 	st.ft.dropHandles()
-	pc.Set(key, true)
+	pc.Set(key, g.Some(true))
 	os.Remove(p)
 	os.Mkdir(p, 0o755) // a read fails once
 	b := make([]byte, 16<<10)

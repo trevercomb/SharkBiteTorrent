@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 
+	g "github.com/anacrolix/generics"
+
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
 )
@@ -613,7 +615,7 @@ func clearComplete(pc storage.PieceCompletion, ih metainfo.Hash, n int) {
 	for i := range n {
 		key := metainfo.PieceKey{InfoHash: ih, Index: i}
 		if c, err := pc.Get(key); err == nil && c.Ok && c.Complete {
-			pc.Set(key, false)
+			pc.Set(key, g.Some(false))
 		}
 	}
 }
