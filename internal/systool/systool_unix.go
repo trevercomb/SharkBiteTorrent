@@ -11,10 +11,11 @@ import (
 // there; the local and Homebrew folders are for tools the user installed
 // (ClamAV, Tailscale's CLI). Those are writable by the user on macOS, so a
 // program running as the user could replace them; that's no more than it
-// could do to the app itself.
+// could do to the app itself. /usr/local/clamav/bin is where ClamAV's own
+// macOS installer (the .pkg from clamav.net) puts it, owned by root.
 var dirs = []string{
 	"/usr/bin", "/bin", "/usr/sbin", "/sbin",
-	"/usr/local/bin", "/usr/local/sbin", "/opt/homebrew/bin", "/opt/homebrew/sbin",
+	"/usr/local/bin", "/usr/local/sbin", "/usr/local/clamav/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin",
 }
 
 // Find returns the first fixed folder that has the tool.

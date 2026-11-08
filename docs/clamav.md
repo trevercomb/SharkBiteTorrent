@@ -39,12 +39,25 @@ Install ClamAV from your distribution, then run `sudo freshclam` once. If freshc
 brew install clamav
 cd /opt/homebrew/etc/clamav            # /usr/local/etc/clamav on Intel Macs
 sed 's/^Example/#Example/' freshclam.conf.sample > freshclam.conf
+echo "CVDCertsDirectory $PWD/certs" >> freshclam.conf
 freshclam                              # download the virus list (about 110 MB)
 ```
 
-Homebrew installs a sample config whose first setting, `Example`, stops freshclam from running until it's switched off; the `sed` line makes a working copy with it commented out. No `sudo` is needed: Homebrew's folders belong to you.
+Homebrew installs a sample config whose first setting, `Example`, stops freshclam from running until it's switched off; the `sed` line makes a working copy with it commented out. ClamAV 1.5 and later also check the virus list's signature against the certificate in `certs`, and the sample looks for it in `/etc/clamav/certs`, where Homebrew doesn't put it: the `echo` line points it to Homebrew's copy (without it, freshclam says `NULL X509 store`). No `sudo` is needed: Homebrew's folders belong to you.
 
 Run `freshclam` again now and then (weekly, say) to get new virus signatures.
+
+### Or ClamAV's own installer
+
+The `.pkg` from [clamav.net](https://www.clamav.net/downloads) installs ClamAV in `/usr/local/clamav` (the app finds it there), but without a working config or a virus list. Finish it in Terminal (each line asks for your password):
+
+```sh
+sudo sh -c "sed 's/^Example/#Example/' /usr/local/clamav/etc/freshclam.conf.sample > /usr/local/clamav/etc/freshclam.conf && echo 'CVDCertsDirectory /usr/local/clamav/etc/certs' >> /usr/local/clamav/etc/freshclam.conf"
+sudo mkdir -p /usr/local/clamav/share/clamav && sudo chown _clamav:_clamav /usr/local/clamav/share/clamav
+sudo /usr/local/clamav/bin/freshclam   # download the virus list (about 110 MB)
+```
+
+The folders belong to the system here, hence `sudo`; freshclam hands the virus list to macOS's built-in `_clamav` account. Run the last line again now and then to get new virus signatures.
 
 ## Checking it works
 
