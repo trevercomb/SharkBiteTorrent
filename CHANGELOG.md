@@ -16,6 +16,8 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 
 ### Fixed
 - Paste links: a crafted web page could make reading it slow (a fix in Go's HTML library), and the VPN tunnel had a rare length miscalculation in its packet handling (a fix in WireGuard's library).
+- Downloads to a slow drive (a NAS, especially from a Mac) lost progress when the app was quit: pieces already downloaded but still waiting to be written (up to 256 MB) were mostly thrown away and downloaded again after restarting. Quitting now writes them all out, in order and much faster (it can take up to 30 seconds on a NAS).
+- macOS: ClamAV installed with its own installer from clamav.net (in `/usr/local/clamav`) wasn't found, so finished downloads weren't scanned. [How to finish that install](docs/clamav.md).
 
 ## [0.2.42] - 2026-11-07
 

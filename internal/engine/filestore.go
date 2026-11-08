@@ -262,12 +262,11 @@ func safeName(c string) bool {
 		!strings.HasSuffix(c, ".") && !strings.HasSuffix(c, " ")
 }
 
-const (
-	blockSize = 16 << 10 // BitTorrent's request size; buffers track blocks
-	// maxBuffered caps memory used by unfinished pieces per torrent. Past
-	// it, the oldest partial piece is written to disk early.
-	maxBuffered = 256 << 20
-)
+const blockSize = 16 << 10 // BitTorrent's request size; buffers track blocks
+
+// maxBuffered caps memory used by unfinished pieces per torrent. Past it,
+// the oldest buffered piece is written to disk early. (A variable for tests.)
+var maxBuffered int64 = 256 << 20
 
 func (s *fileStore) OpenTorrent(_ context.Context, info *metainfo.Info, ih metainfo.Hash) (storage.TorrentImpl, error) {
 	s.mu.Lock()
@@ -662,8 +661,9 @@ func (t *fileTorrent) close() error {
 	if !removed {
 		// In the background, bounded: one write stuck on a dead network
 		// drive must not hang quitting. Pieces it doesn't get to are
-		// downloaded again.
-		deadline := time.Now().Add(15 * time.Second)
+		// downloaded again. 30 s writes a full backlog (maxBuffered) to a NAS
+		// at the ~13 MB/s a Mac manages in order.
+		deadline := time.Now().Add(30 * time.Second)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -705,11 +705,75 @@ func (t *fileTorrent) close() error {
 // complete, hash-checked pieces waiting for that built up to maxBuffered;
 // quitting threw it away, so up to 256 MB downloaded again after a restart.
 // Each piece's hash is checked here first; nothing unverified is recorded.
+//
+// They're written in order, through one handle per file, and synced in
+// batches: writing each piece out of order with its own open, sync and
+// close managed about 4 MB/s to a NAS from a Mac (in order, about 13), so
+// most of a full backlog was still lost to the time limit. A piece is
+// recorded only once the files it's in have been synced after it.
 func (t *fileTorrent) writeFinished(bufs map[int]*pieceBuf, deadline time.Time) {
-	for idx, buf := range bufs {
-		if time.Now().After(deadline) {
-			return // the rest downloads again: quitting mustn't hang
+	const batch = 32 << 20 // written between syncs
+	order := make([]int, 0, len(bufs))
+	for idx := range bufs {
+		order = append(order, idx)
+	}
+	slices.Sort(order)
+
+	files := map[int]*os.File{} // open, ours
+	failed := map[int]bool{}    // couldn't open or write: nothing in it is recorded
+	defer func() {
+		for _, f := range files {
+			f.Close()
 		}
+	}()
+	open := func(i int) (*os.File, error) {
+		if f := files[i]; f != nil {
+			return f, nil
+		}
+		// Blocked torrents have nothing buffered. The file may not exist yet
+		// if this is its first piece to reach the disk.
+		f, err := os.OpenFile(t.paths[i], os.O_WRONLY, 0o644)
+		if err == nil {
+			if err = t.ours(i); err != nil {
+				f.Close()
+			}
+		} else if errors.Is(err, fs.ErrNotExist) {
+			f, err = t.createFile(i)
+		}
+		if err != nil {
+			return nil, err
+		}
+		files[i] = f
+		return f, nil
+	}
+
+	var pending []int          // written since the last sync
+	touched := map[int]bool{}  // files written since the last sync
+	inFiles := map[int][]int{} // the files each pending piece is in
+	commit := func() {
+		for i := range touched {
+			if files[i] == nil || files[i].Sync() != nil { // on the drive before it's recorded (see syncData)
+				failed[i] = true
+			}
+		}
+	pieces:
+		for _, idx := range pending {
+			for _, i := range inFiles[idx] {
+				if failed[i] {
+					continue pieces
+				}
+			}
+			t.pc.Set(metainfo.PieceKey{InfoHash: t.ih, Index: idx}, g.Some(true))
+		}
+		pending, touched, inFiles = pending[:0], map[int]bool{}, map[int][]int{}
+	}
+
+	written := 0
+	for _, idx := range order {
+		if time.Now().After(deadline) {
+			break // the rest downloads again: quitting mustn't hang
+		}
+		buf := bufs[idx]
 		piece := t.info.Piece(idx)
 		want := piece.V1Hash()
 		if !want.Ok || int64(len(buf.data)) < piece.Length() || !covered(buf, 0, int(piece.Length())) {
@@ -721,41 +785,34 @@ func (t *fileTorrent) writeFinished(bufs map[int]*pieceBuf, deadline time.Time) 
 		}
 		ext := segments.Extent{Start: piece.Offset(), Length: piece.Length()}
 		ok, n := true, int64(0)
+		var in []int
 		for i, e := range t.index.LocateIter(ext) {
 			if e.Length == 0 {
 				continue
 			}
-			// Blocked torrents have nothing buffered. The file may not exist
-			// yet if this is its first piece to reach the disk.
-			f, err := os.OpenFile(t.paths[i], os.O_WRONLY, 0o644)
-			if err == nil {
-				if err = t.ours(i); err != nil {
-					f.Close()
-				}
-			} else if errors.Is(err, fs.ErrNotExist) {
-				f, err = t.createFile(i)
-			}
-			if err == nil {
+			in = append(in, i)
+			f, err := open(i)
+			if err == nil && !failed[i] {
 				_, err = f.WriteAt(data[n:n+e.Length], e.Start)
-				if err == nil {
-					err = f.Sync() // on the drive before it's recorded (see syncData)
-				}
-				// A network drive can report a failed write only here; the
-				// piece is recorded only if this succeeds too.
-				if cerr := f.Close(); err == nil {
-					err = cerr
-				}
 			}
-			if err != nil {
+			if err != nil || failed[i] {
+				failed[i] = true
 				ok = false
 				break
 			}
+			touched[i] = true
 			n += e.Length
 		}
 		if ok {
-			t.pc.Set(metainfo.PieceKey{InfoHash: t.ih, Index: idx}, g.Some(true))
+			pending = append(pending, idx)
+			inFiles[idx] = in
+		}
+		if written += len(data); written >= batch {
+			commit()
+			written = 0
 		}
 	}
+	commit()
 }
 
 type filePiece struct {
@@ -869,7 +926,18 @@ func (p *filePiece) WriteAt(b []byte, off int64) (int, error) {
 	p.t.mu.Unlock()
 
 	if evict != nil {
-		// Memory cap reached: write the oldest partial piece out now.
+		// Memory cap reached: write the oldest buffer out now. A piece that's
+		// whole in it (downloaded, waiting for the library's check and
+		// MarkComplete) is first recorded as unknown, so if the app stops
+		// before MarkComplete records it, the next start checks it from the
+		// drive (the library checks every piece whose completion isn't
+		// known) instead of downloading it again. On a NAS slower than the
+		// download (a Mac's, ~7 MB/s against 20) hundreds of pieces waited
+		// like this, and a restart lost them all. Unknown before the write,
+		// so an interrupted write is caught by that check too.
+		if covered(evict, 0, len(evict.data)) {
+			p.t.pc.Set(metainfo.PieceKey{InfoHash: p.t.ih, Index: evictIdx}, g.None[bool]())
+		}
 		p.flushAt(evictIdx, evict)
 	}
 	return len(b), nil

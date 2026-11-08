@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"crypto/sha1"
+	g "github.com/anacrolix/generics"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -232,6 +233,112 @@ func TestCloseWritesFinishedPieces(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "f.bin")); !bytes.Equal(b[:16<<10], good) {
 		t.Error("piece 0's data wasn't written")
+	}
+}
+
+// A whole backlog is written on close, in order and synced in batches:
+// every correct piece is recorded with its data on the drive, and none that
+// fails its hash is.
+func TestCloseWritesBacklog(t *testing.T) {
+	dir := t.TempDir()
+	pc := storage.NewMapPieceCompletion()
+	const plen, n = 16 << 10, 40
+	var sums []byte
+	pieces := make([][]byte, n)
+	for i := range pieces {
+		pieces[i] = bytes.Repeat([]byte{byte(i)}, plen)
+		sum := sha1.Sum(pieces[i])
+		sums = append(sums, sum[:]...)
+	}
+	info := &metainfo.Info{Name: "f.bin", PieceLength: plen, Length: plen * n, Pieces: sums}
+	st := newFileStore(dir, pc, "", false)
+	impl, err := st.OpenTorrent(t.Context(), info, hashN(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := map[int]bool{7: true, 23: true}
+	for i := n - 1; i >= 0; i-- { // buffered in reverse order
+		data := pieces[i]
+		if bad[i] {
+			data = bytes.Repeat([]byte("x"), plen)
+		}
+		if _, err := impl.Piece(info.Piece(i)).WriteAt(data, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := impl.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "f.bin"))
+	for i := 0; i < n; i++ {
+		c, _ := pc.Get(metainfo.PieceKey{InfoHash: hashN(10), Index: i})
+		if c.Complete == bad[i] {
+			t.Errorf("piece %d recorded %v", i, c.Complete)
+		}
+		if !bad[i] && (len(b) < (i+1)*plen || !bytes.Equal(b[i*plen:(i+1)*plen], pieces[i])) {
+			t.Errorf("piece %d's data isn't on the drive", i)
+		}
+	}
+}
+
+// A whole piece evicted to disk before MarkComplete (the download outran a
+// slow drive) is left recorded as unknown, so the next start checks it from
+// the drive rather than downloading it again; a partial one isn't touched.
+func TestEvictedWholePieceUnknown(t *testing.T) {
+	const plen, n = 2 * blockSize, 4 // two blocks a piece, so a piece can be half there
+	old := maxBuffered
+	maxBuffered = 2 * plen
+	t.Cleanup(func() { maxBuffered = old })
+	dir := t.TempDir()
+	pc, err := storage.NewBoltPieceCompletion(t.TempDir()) // as the app: unknown deletes the record
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	var sums []byte
+	pieces := make([][]byte, n)
+	for i := range pieces {
+		pieces[i] = bytes.Repeat([]byte{byte('a' + i)}, plen)
+		sum := sha1.Sum(pieces[i])
+		sums = append(sums, sum[:]...)
+	}
+	info := &metainfo.Info{Name: "f.bin", PieceLength: plen, Length: plen * n, Pieces: sums}
+	ih := hashN(11)
+	for i := 0; i < n; i++ { // recorded as incomplete, as the library leaves new pieces
+		pc.Set(metainfo.PieceKey{InfoHash: ih, Index: i}, g.Some(false))
+	}
+	st := newFileStore(dir, pc, "", false)
+	impl, err := st.OpenTorrent(t.Context(), info, ih)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { impl.Close() })
+	get := func(i int) storage.Completion {
+		c, _ := pc.Get(metainfo.PieceKey{InfoHash: ih, Index: i})
+		return c
+	}
+	write := func(i int, blocks ...int) { // block by block, as the library writes
+		for _, b := range blocks {
+			if _, err := impl.Piece(info.Piece(i)).WriteAt(pieces[i][b*blockSize:(b+1)*blockSize], int64(b*blockSize)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write(0, 0) // half of piece 0
+	write(1, 0, 1)
+	write(2, 0, 1) // over the cap: piece 0 (partial) is evicted
+	if c := get(0); !c.Ok || c.Complete {
+		t.Errorf("evicted partial piece 0 recorded %+v, want incomplete still", c)
+	}
+	write(3, 0, 1) // piece 1 (whole) is evicted
+	if c := get(1); c.Ok {
+		t.Errorf("evicted whole piece 1 recorded %+v, want unknown", c)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "f.bin")); len(b) < 2*plen || !bytes.Equal(b[plen:2*plen], pieces[1]) {
+		t.Error("evicted piece 1's data isn't on the drive")
+	}
+	if c := get(3); !c.Ok || c.Complete {
+		t.Errorf("buffered piece 3 recorded %+v, want incomplete", c)
 	}
 }
 
