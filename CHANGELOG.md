@@ -10,6 +10,13 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 - **Seeding limits** (Settings → Downloads): stop seeding at a ratio, after a number of hours, or both, then pause the torrent or remove it from the list (its files stay). The list shows each torrent's ratio. A torrent you resume after it stopped keeps seeding.
 - **Notifications** (Settings → Downloads, on by default): a system notification when a download finishes, once its malware scan is done, saying what the scan found. One whose name looks like a disguised program says to check it before opening, whatever the scan says.
 
+### Changed
+- The torrent engine is upstream's newest code (164 changes since the version the app used), no longer a patched copy: among them, trackers that keep failing are asked less and less often, and a tracker's answer can't be made huge. Nothing should look different; if torrents behave oddly, please report it.
+- Built with Wails 2.17.1, the toolkit the app's window is made with (a security fix for Linux: frames embedded in a window can no longer reach the window's connection to the app).
+
+### Fixed
+- Paste links: a crafted web page could make reading it slow (a fix in Go's HTML library), and the VPN tunnel had a rare length miscalculation in its packet handling (a fix in WireGuard's library).
+
 ## [0.2.42] - 2026-11-07
 
 ### Added
