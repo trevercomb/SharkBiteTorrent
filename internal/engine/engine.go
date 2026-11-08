@@ -179,6 +179,9 @@ func New(tun *tunnel.Tunnel, opts Options) (*Engine, error) {
 	cfg.NoDHT = true
 	cfg.NoDefaultPortForwarding = true // UPnP would map a port on the real LAN
 	cfg.DisableWebtorrent = true       // WebRTC uses OS sockets
+	// Local service discovery (BEP 14) multicasts on the home network. Off
+	// by default in the library; kept off here whatever its default becomes.
+	cfg.LocalServiceDiscovery = nil
 	cfg.AcceptPeerConnections = opts.ForwardedPort > 0
 
 	cfg.TrackerDialContext = verifiedTrackerDial(tun.DialContext) // HTTPS trackers get real certificate checks
@@ -303,6 +306,7 @@ func newDirect(opts Options) (*Engine, error) {
 	cfg.UploadRateLimiter = e.up
 	cfg.DisableUTP = true // as in VPN mode: no uTP (see README)
 	cfg.DisableWebtorrent = true
+	cfg.LocalServiceDiscovery = nil // see New
 	// HTTPS trackers' certificates are checked here too (see trackertls.go).
 	cfg.TrackerDialContext = verifiedTrackerDial((&net.Dialer{Timeout: 30 * time.Second}).DialContext)
 	cfg.ListenPort = 0 // a free port; UPnP maps whichever we get
