@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  WAILS_VERSION: v2.17.0
+  WAILS_VERSION: v2.17.1
   GOTOOLCHAIN: auto # honour the toolchain line in go.mod (patched Go)
 
 jobs:

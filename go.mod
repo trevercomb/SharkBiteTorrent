@@ -11,13 +11,13 @@ require (
 	github.com/anacrolix/dht/v2 v2.24.0
 	github.com/anacrolix/torrent v1.61.1-0.20261024051421-5f95cd33fd29
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/wailsapp/wails/v2 v2.17.0
+	github.com/wailsapp/wails/v2 v2.17.1
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	golang.org/x/time v0.16.0
-	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
+	golang.zx2c4.com/wireguard v0.0.0-20261024220952-b3bc704ef0ee
 )
 
 require (
@@ -132,7 +132,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	golang.org/x/crypto v0.58.0
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
