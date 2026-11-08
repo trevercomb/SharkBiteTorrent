@@ -238,8 +238,16 @@ export function SetAskSaveLocation(arg1) {
   return window['go']['main']['App']['SetAskSaveLocation'](arg1);
 }
 
+export function SetFilesHigh(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetFilesHigh'](arg1, arg2, arg3);
+}
+
 export function SetFilesWanted(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetFilesWanted'](arg1, arg2, arg3);
+}
+
+export function SetFirstLast(arg1, arg2) {
+  return window['go']['main']['App']['SetFirstLast'](arg1, arg2);
 }
 
 export function SetRemote(arg1, arg2) {

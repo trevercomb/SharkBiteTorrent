@@ -31,7 +31,7 @@ require (
 
 require (
 	a.local/earlyinit v0.0.0
-	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
+	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3
 	github.com/RoaringBitmap/roaring v1.2.3 // indirect
 	github.com/alecthomas/atomic v0.1.0-alpha2 // indirect
 	github.com/anacrolix/btree v0.0.0-20251201064447-d86c3fa41bd8 // indirect

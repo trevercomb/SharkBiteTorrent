@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { GetFiles, SetFilesWanted, ScanFully, MarkScanSeen } from '../wailsjs/go/main/App.js'
+  import { GetFiles, SetFilesWanted, SetFilesHigh, SetFirstLast, ScanFully, MarkScanSeen } from '../wailsjs/go/main/App.js'
   import type { engine } from '../wailsjs/go/models'
   import { bytes } from './format'
   import PieceMap from './PieceMap.svelte'
@@ -64,12 +64,37 @@
       onError(String(e))
     }
   }
+
+  async function setHigh(indexes: number[], high: boolean) {
+    try {
+      await SetFilesHigh(hash, indexes, high)
+      await load()
+    } catch (e) {
+      onError(String(e))
+    }
+  }
+
+  // "First and last pieces first": a video's start and its index at the end
+  // come first, so it can be previewed while the rest downloads.
+  async function setFirstLast(on: boolean) {
+    try {
+      await SetFirstLast(hash, on)
+    } catch (e) {
+      onError(String(e))
+    }
+  }
 </script>
 
 <section class="panel">
   <div class="head">
     <b title={torrent.name}>{torrent.name || torrent.hash}</b>
     <span class="muted">{files.length} file{files.length === 1 ? '' : 's'}</span>
+    {#if files.length > 0 && torrent.state !== 'seeding'}
+      <label class="firstlast" title="Each file's first and last pieces come first, so a video can be previewed while the rest downloads">
+        <input type="checkbox" checked={torrent.firstLast} onchange={e => setFirstLast((e.target as HTMLInputElement).checked)} />
+        First and last pieces first
+      </label>
+    {/if}
   </div>
   {#if warnings.length > 0 || torrent.scanState || torrent.verified || torrent.verifying || torrent.sfv || torrent.problem}
     <div class="safety">
@@ -163,7 +188,7 @@
                 title="Select all"
               />
             </th>
-            <th>File</th><th class="num">Size</th><th class="num">Done</th>
+            <th>File</th><th class="num">Size</th><th class="num">Done</th><th class="prio">Priority</th>
           </tr>
         </thead>
         <tbody>
@@ -177,6 +202,15 @@
               </td>
               <td class="num">{bytes(f.size)}</td>
               <td class="num">{f.size ? ((f.done / f.size) * 100).toFixed(0) : 100}%</td>
+              <td class="prio">
+                {#if f.wanted && f.done < f.size}
+                  <select value={f.high ? 'high' : 'normal'} onchange={e => setHigh([f.index], (e.target as HTMLSelectElement).value === 'high')}
+                    title="High: downloaded before the other files">
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                  </select>
+                {:else}<span class="muted">{f.wanted ? 'Done' : '–'}</span>{/if}
+              </td>
             </tr>
           {/each}
         </tbody>
@@ -210,5 +244,8 @@
   .check { width: 32px; }
   .path { max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .num { text-align: right; }
-  tr.skipped td:not(.check) { color: var(--muted); text-decoration: line-through; }
+  tr.skipped td:not(.check):not(.prio) { color: var(--muted); text-decoration: line-through; }
+  .prio { width: 90px; }
+  .prio select { padding: 1px 4px; font-size: 12px; }
+  .firstlast { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: pointer; }
 </style>

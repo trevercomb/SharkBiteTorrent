@@ -125,7 +125,11 @@ export function SearchTorrents(arg1:string,arg2:string):Promise<Array<search.Res
 
 export function SetAskSaveLocation(arg1:boolean):Promise<void>;
 
+export function SetFilesHigh(arg1:string,arg2:Array<number>,arg3:boolean):Promise<void>;
+
 export function SetFilesWanted(arg1:string,arg2:Array<number>,arg3:boolean):Promise<void>;
+
+export function SetFirstLast(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetRemote(arg1:boolean,arg2:number):Promise<main.RemoteStatus>;
 
