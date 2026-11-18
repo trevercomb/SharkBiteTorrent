@@ -38,7 +38,7 @@ jobs:
           npm ci --ignore-scripts
           npm run build
           npx svelte-check --threshold error
-          npm audit --audit-level=high
+          ../scripts/npm-audit.sh # npm audit, high and up, minus listed exceptions
 
       # After the frontend build: the Go code embeds frontend/dist.
       - name: Go vet (all build variants)
