@@ -269,9 +269,10 @@ jobs:
         run: scripts/go-download.sh
       - name: npm audit, and the frontend build the Go code embeds
         working-directory: frontend
+        shell: bash
         run: |
           npm ci --ignore-scripts
-          npm audit --audit-level=high
+          ../scripts/npm-audit.sh # npm audit, high and up, minus listed exceptions
           npm run build
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
