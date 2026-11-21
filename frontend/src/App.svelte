@@ -547,7 +547,10 @@
           <b>VPN on</b> · {vpn.name} · exit {vpn.exitIP} · {vpn.location}{vpn.colo ? ` (${vpn.colo})` : ''}
           {#if vpn.port}· port {vpn.port} open{/if}
         </span>
-        {#if vpn.error}<span class="warn" title={vpn.error}>⚠ check failed</span>{/if}
+        {#if vpn.error}
+          <span class="warn" title={vpn.error + ' (reconnects by itself after 3 failed checks in a row)'}>⚠ check failed</span>
+          <button onclick={() => run(Reconnect)} title="Reconnect the VPN now. Torrents pick up where they left off.">Retry</button>
+        {/if}
         {#if vpn.warning?.startsWith("couldn't switch")}
           <span class="warn" title={vpn.warning}>⚠ VPN switch failed</span>
           <button onclick={() => run(Reconnect)}>Retry</button>

@@ -871,10 +871,22 @@ func (a *App) disconnect() {
 	a.direct.closeAll() // any that slipped in while shutting down
 }
 
-// monitor re-checks the exit IP every minute so the UI reflects reality.
+// monitor re-checks the exit IP every minute so the UI reflects reality, and
+// reconnects when the tunnel has stopped passing traffic: a provider's server
+// can forget our key (PIA, after hours of use: every check timed out until
+// the app was restarted), and only a new connection helps then.
 func (a *App) monitor(ctx context.Context, tun *tunnel.Tunnel) {
-	tick := time.NewTicker(60 * time.Second)
+	a.watchTunnel(ctx, time.Minute, tun.CheckTrace, a.Reconnect)
+}
+
+// failedChecksBeforeReconnect: one failed check can be a blip; this many in
+// a row (a few minutes) means the tunnel is dead.
+const failedChecksBeforeReconnect = 3
+
+func (a *App) watchTunnel(ctx context.Context, every time.Duration, check func(context.Context) (*tunnel.Trace, error), reconnect func()) {
+	tick := time.NewTicker(every)
 	defer tick.Stop()
+	failed := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -882,18 +894,24 @@ func (a *App) monitor(ctx context.Context, tun *tunnel.Tunnel) {
 		case <-tick.C:
 		}
 		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		tr, err := tun.CheckTrace(cctx)
+		tr, err := check(cctx)
 		cancel()
 		if ctx.Err() != nil {
 			return
 		}
 		a.mu.Lock()
 		if err != nil {
+			failed++
 			a.vpn.Error = "last check failed: " + err.Error()
 		} else {
+			failed = 0
 			a.vpn.ExitIP, a.vpn.Location, a.vpn.Colo, a.vpn.Error = tr.IP, tr.Location, tr.Colo, ""
 		}
 		a.mu.Unlock()
+		if failed >= failedChecksBeforeReconnect {
+			reconnect() // ends this monitor; the new connection starts its own
+			return
+		}
 	}
 }
 
