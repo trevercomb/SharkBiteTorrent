@@ -372,7 +372,19 @@ type fileTorrent struct {
 	// unreadLog, while Verify runs, collects the pieces that couldn't be
 	// read (not counted as damaged, and not verified either).
 	unreadLog map[int]bool
+	// pending: pieces MarkComplete wrote since the last batch, waiting for
+	// their files to be synced before they're recorded (see syncPending);
+	// syncing: the batch being synced now. Both count as complete (see
+	// Completion). syncTimer starts the next batch; syncMu runs one at a time.
+	pending, syncing map[int]bool
+	syncTimer        *time.Timer
+	syncMu           sync.Mutex
 }
+
+// syncEvery is how long a finished piece waits for its batch: the files
+// are synced once for all the pieces written meanwhile, instead of once per
+// piece. (A variable for tests.)
+var syncEvery = time.Second
 
 // pieceBuf holds a piece's blocks until it's complete. have marks which
 // blocks were written into it.
@@ -688,6 +700,24 @@ func (t *fileTorrent) close() error {
 	for t.inUse > 0 && !t.closeTimedOut {
 		t.freed.Wait()
 	}
+	// Then sync and record the last batch, bounded like the rest: a sync
+	// stuck on a dead network drive must not hang quitting (those pieces are
+	// downloaded again).
+	if t.syncTimer != nil {
+		t.syncTimer.Stop()
+		t.syncTimer = nil
+	}
+	t.mu.Unlock()
+	synced := make(chan struct{})
+	go func() {
+		defer close(synced)
+		t.syncPending()
+	}()
+	select {
+	case <-synced:
+	case <-time.After(10 * time.Second):
+	}
+	t.mu.Lock()
 	var errs []error
 	for i, pool := range t.handles {
 		for _, f := range pool.idle {
@@ -752,7 +782,7 @@ func (t *fileTorrent) writeFinished(bufs map[int]*pieceBuf, deadline time.Time) 
 	inFiles := map[int][]int{} // the files each pending piece is in
 	commit := func() {
 		for i := range touched {
-			if files[i] == nil || files[i].Sync() != nil { // on the drive before it's recorded (see syncData)
+			if files[i] == nil || files[i].Sync() != nil { // on the drive before it's recorded (see syncPending)
 				failed[i] = true
 			}
 		}
@@ -984,35 +1014,118 @@ func (p *filePiece) flushAt(idx int, buf *pieceBuf) error {
 	return errors.Join(errs...)
 }
 
-// syncData waits until the piece's data is on the drive (fsync /
-// FlushFileBuffers on each file it covers). Without it a network drive's
-// client keeps writes in its cache and reports them done: if the connection
-// then drops, the cached data is lost but the piece was already recorded as
+// syncPending waits until the data of the pieces MarkComplete wrote since
+// the last batch is on the drive (fsync / FlushFileBuffers on each file
+// they're in), then records them. Without the sync a network drive's client
+// keeps writes in its cache and reports them done: if the connection then
+// drops, the cached data is lost but the piece was already recorded as
 // finished, so the download completed with damaged pieces (a CachyOS ISO
 // failed its checksum after a mapped drive was disconnected mid-download).
-// Costs about 10% of write speed on a NAS.
-func (p *filePiece) syncData() error {
-	ext := segments.Extent{Start: p.p.Offset(), Length: p.p.Length()}
-	for i, e := range p.t.index.LocateIter(ext) {
-		if e.Length == 0 {
-			continue
-		}
-		f, err := p.t.acquire(i, false)
-		if err != nil {
-			return err
-		}
-		if err := f.Sync(); err != nil {
-			p.t.discard(i, f)
-			if p.t.store.checkGone() {
-				return p.t.store.Unavailable()
-			}
-			return err
-		}
-		p.t.release(i, f)
+//
+// Once per batch (syncEvery), not per piece: syncing each piece before the
+// library's next one halved the write speed to a NAS (7 MB/s against 13 on
+// a Mac), so downloads outran the drive, the memory backlog filled up
+// (maxBuffered), and killing the app lost all of it (50% back to 15% on
+// Windows). A piece whose file fails to sync isn't recorded; the engine has
+// it checked again (markFailed).
+func (t *fileTorrent) syncPending() {
+	t.syncMu.Lock()
+	defer t.syncMu.Unlock()
+	t.mu.Lock()
+	t.syncTimer = nil
+	batch := t.pending
+	t.pending = nil
+	if len(batch) == 0 {
+		t.mu.Unlock()
+		return
 	}
+	t.syncing = batch
+	pieces := make([]int, 0, len(batch))
+	for idx := range batch {
+		pieces = append(pieces, idx)
+	}
+	t.inUse++ // close and waitReleased wait for this
+	t.mu.Unlock()
+	defer func() {
+		t.mu.Lock()
+		t.inUse--
+		t.freed.Broadcast()
+		t.mu.Unlock()
+	}()
+
+	inFiles := map[int][]int{}
+	synced := map[int]bool{}
+	for _, idx := range pieces {
+		piece := t.info.Piece(idx)
+		for i, e := range t.index.LocateIter(segments.Extent{Start: piece.Offset(), Length: piece.Length()}) {
+			if e.Length == 0 {
+				continue
+			}
+			inFiles[idx] = append(inFiles[idx], i)
+			if _, done := synced[i]; !done {
+				synced[i] = t.syncFile(i) == nil
+			}
+		}
+	}
+	t.store.mu.Lock()
+	removed := t.store.removed
+	t.store.mu.Unlock()
+
+	var done []metainfo.PieceKey
+	var bad []int
+	t.mu.Lock()
+pieces:
+	for _, idx := range pieces {
+		if !t.syncing[idx] {
+			continue // checked again meanwhile, and failed (MarkNotComplete)
+		}
+		for _, i := range inFiles[idx] {
+			if !synced[i] {
+				bad = append(bad, idx)
+				continue pieces
+			}
+		}
+		done = append(done, metainfo.PieceKey{InfoHash: t.ih, Index: idx})
+	}
+	if !removed {
+		// Under t.mu, so a MarkNotComplete can't come between the check above
+		// and the record. Removed meanwhile: no "complete" records left behind.
+		recordComplete(t.pc, done...)
+	}
+	t.syncing = nil
+	t.mu.Unlock()
+	for _, idx := range bad {
+		t.store.markFailed(idx)
+	}
+}
+
+// syncFile waits until file i's written data is on the drive. After close
+// the torrent's handles are gone, so the last batch opens the file again.
+func (t *fileTorrent) syncFile(i int) error {
+	f, err := t.acquire(i, false)
+	if err != nil {
+		t.mu.Lock()
+		closed := t.closed
+		t.mu.Unlock()
+		if !closed {
+			return err
+		}
+		if f, err = os.OpenFile(t.paths[i], os.O_WRONLY, 0); err != nil {
+			return err
+		}
+		return errors.Join(f.Sync(), f.Close())
+	}
+	if err := f.Sync(); err != nil {
+		t.discard(i, f)
+		t.store.checkGone()
+		return err
+	}
+	t.release(i, f)
 	return nil
 }
 
+// MarkComplete writes the piece out and leaves it for the next batch to
+// sync and record (see syncPending).
 func (p *filePiece) MarkComplete() error {
 	idx := p.p.Index()
 	p.t.mu.Lock()
@@ -1039,23 +1152,27 @@ func (p *filePiece) MarkComplete() error {
 			return err
 		}
 	}
-	if err := p.syncData(); err != nil {
-		p.t.store.markFailed(idx)
-		return err // not on the drive for sure: not recorded
-	}
 	p.t.store.mu.Lock()
 	removed := p.t.store.removed
 	p.t.store.mu.Unlock()
 	if removed {
 		// Removed meanwhile: don't leave a "complete" record behind. (On a
 		// normal close the piece is recorded: its data is written, and close
-		// waits for this, so quitting doesn't lose finished pieces.)
+		// waits for this and syncs the last batch, so quitting doesn't lose
+		// finished pieces.)
 		return errors.New("torrent storage closed")
 	}
 	p.t.mu.Lock()
 	delete(p.t.readFailed, idx)
+	if p.t.pending == nil {
+		p.t.pending = map[int]bool{}
+	}
+	p.t.pending[idx] = true
+	if p.t.syncTimer == nil {
+		p.t.syncTimer = time.AfterFunc(syncEvery, p.t.syncPending)
+	}
 	p.t.mu.Unlock()
-	return recordComplete(p.t.pc, p.key())
+	return nil
 }
 
 // recordComplete records pieces as complete and saves the records now,
@@ -1093,6 +1210,8 @@ func (p *filePiece) MarkNotComplete() error {
 	if p.t.failLog != nil {
 		p.t.failLog[idx] = true
 	}
+	delete(p.t.pending, idx) // written but failed a later check: not recorded
+	delete(p.t.syncing, idx)
 	if buf := p.t.bufs[idx]; buf != nil {
 		delete(p.t.bufs, idx) // failed the hash check: discard
 		p.t.buffered -= int64(len(buf.data))
@@ -1109,8 +1228,14 @@ func (p *filePiece) MarkNotComplete() error {
 
 // Completion trusts the database, but double-checks that the files covering
 // the piece still exist at full size (they may have been deleted outside the
-// app).
+// app). A piece written and waiting for its batch (syncPending) is complete.
 func (p *filePiece) Completion() storage.Completion {
+	p.t.mu.Lock()
+	written := p.t.pending[p.p.Index()] || p.t.syncing[p.p.Index()]
+	p.t.mu.Unlock()
+	if written {
+		return storage.Completion{Ok: true, Complete: true}
+	}
 	c, err := p.t.pc.Get(p.key())
 	if err != nil {
 		return storage.Completion{Err: err}
