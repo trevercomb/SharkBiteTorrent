@@ -9,13 +9,13 @@ require (
 	fyne.io/systray v1.12.2
 	github.com/ViRb3/wgcf/v2 v2.3.1
 	github.com/anacrolix/dht/v2 v2.24.0
-	github.com/anacrolix/torrent v1.61.1-0.20261024051421-5f95cd33fd29
+	github.com/anacrolix/torrent v1.62.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/wailsapp/wails/v2 v2.17.1
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto/x509roots/fallback v0.0.0-20261020153306-9f2b28d4331a
 	golang.org/x/sys v0.50.0
-	golang.org/x/term v0.47.0
+	golang.org/x/term v0.48.0
 	golang.org/x/time v0.16.0
 	golang.zx2c4.com/wireguard v0.0.0-20261024220952-b3bc704ef0ee
 )
@@ -24,6 +24,7 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.16.0 // indirect
 	github.com/anacrolix/go-utp v0.0.0-20260908033909-9f1664acf866 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/pion/transport/v4 v4.1.0 // indirect
@@ -130,11 +131,11 @@ require (
 	go.opentelemetry.io/otel v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
 	golang.org/x/net v0.62.0
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gvisor.dev/gvisor v0.0.0-20250503011706-39ed1f5ac29c // indirect
 	lukechampine.com/blake3 v1.1.6 // indirect

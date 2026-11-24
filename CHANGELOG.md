@@ -11,7 +11,7 @@ What changed in each release of Shark BiteTorrent. The release notes on GitHub a
 - **Notifications** (Settings → Downloads, on by default): a system notification when a download finishes, once its malware scan is done, saying what the scan found. One whose name looks like a disguised program says to check it before opening, whatever the scan says.
 
 ### Changed
-- The torrent engine is upstream's newest code (164 changes since the version the app used), no longer a patched copy: among them, trackers that keep failing are asked less and less often, and a tracker's answer can't be made huge. Nothing should look different; if torrents behave oddly, please report it.
+- The torrent engine is upstream's release v1.62.0 (220 changes since the version the app used), no longer a patched copy: among them, trackers that keep failing are asked less and less often, a tracker's answer can't be made huge, and malformed data from peers or in .torrent files can no longer crash the app or use up its memory. Nothing should look different; if torrents behave oddly, please report it.
 - Built with Wails 2.17.1, the toolkit the app's window is made with (a security fix for Linux: frames embedded in a window can no longer reach the window's connection to the app).
 
 ### Fixed

@@ -342,6 +342,65 @@ func TestEvictedWholePieceUnknown(t *testing.T) {
 	}
 }
 
+// Finished pieces reach the progress database right away, not only when it's
+// closed: since torrent v1.62.0 the bolt store holds "complete" in memory
+// until a checkpoint, and a crash then lost everything since the start. The
+// database is read from a copy taken while it's still open, as a crash
+// would leave it.
+func TestCompleteSavedWithoutClose(t *testing.T) {
+	const plen, n = 2 * blockSize, 2
+	dir, pcDir := t.TempDir(), t.TempDir()
+	pc, err := storage.NewBoltPieceCompletion(pcDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	var sums []byte
+	pieces := make([][]byte, n)
+	for i := range pieces {
+		pieces[i] = bytes.Repeat([]byte{byte('a' + i)}, plen)
+		sum := sha1.Sum(pieces[i])
+		sums = append(sums, sum[:]...)
+	}
+	info := &metainfo.Info{Name: "f.bin", PieceLength: plen, Length: plen * n, Pieces: sums}
+	ih := hashN(12)
+	st := newFileStore(dir, pc, "", false)
+	impl, err := st.OpenTorrent(t.Context(), info, ih)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range pieces {
+		for b := 0; b < plen/blockSize; b++ { // block by block, as the library writes
+			if _, err := impl.Piece(info.Piece(i)).WriteAt(pieces[i][b*blockSize:(b+1)*blockSize], int64(b*blockSize)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := impl.Piece(info.Piece(0)).MarkComplete(); err != nil { // verified while running
+		t.Fatal(err)
+	}
+	impl.Close() // piece 1 is still buffered: written out on close (the quit path)
+
+	b, err := os.ReadFile(filepath.Join(pcDir, ".torrent.bolt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(crashDir, ".torrent.bolt.db"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := storage.NewBoltPieceCompletion(crashDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	for i, how := range []string{"MarkComplete", "the write-out on close"} {
+		if c, _ := after.Get(metainfo.PieceKey{InfoHash: ih, Index: i}); !c.Ok || !c.Complete {
+			t.Errorf("piece %d (%s) not in the database before it's closed: %+v", i, how, c)
+		}
+	}
+}
+
 // openStore opens info in dir with ownership records in owned, closing it
 // when the test ends.
 func openStore(t *testing.T, dir, owned string, info *metainfo.Info, ih metainfo.Hash) (*fileStore, storage.TorrentImpl) {

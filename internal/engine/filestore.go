@@ -756,6 +756,7 @@ func (t *fileTorrent) writeFinished(bufs map[int]*pieceBuf, deadline time.Time) 
 				failed[i] = true
 			}
 		}
+		var done []metainfo.PieceKey
 	pieces:
 		for _, idx := range pending {
 			for _, i := range inFiles[idx] {
@@ -763,8 +764,9 @@ func (t *fileTorrent) writeFinished(bufs map[int]*pieceBuf, deadline time.Time) 
 					continue pieces
 				}
 			}
-			t.pc.Set(metainfo.PieceKey{InfoHash: t.ih, Index: idx}, g.Some(true))
+			done = append(done, metainfo.PieceKey{InfoHash: t.ih, Index: idx})
 		}
+		recordComplete(t.pc, done...)
 		pending, touched, inFiles = pending[:0], map[int]bool{}, map[int][]int{}
 	}
 
@@ -1053,7 +1055,23 @@ func (p *filePiece) MarkComplete() error {
 	p.t.mu.Lock()
 	delete(p.t.readFailed, idx)
 	p.t.mu.Unlock()
-	return p.t.pc.Set(p.key(), g.Some(true))
+	return recordComplete(p.t.pc, p.key())
+}
+
+// recordComplete records pieces as complete and saves the records now,
+// once their data is on the drive. Since torrent v1.62.0 the bolt store keeps
+// "complete" in memory until a checkpoint, which only the library's own file
+// storage asks for: without this, only quitting saved them, and a crash or a
+// forced reboot lost every piece finished since the app started.
+func recordComplete(pc storage.PieceCompletion, keys ...metainfo.PieceKey) error {
+	var err error
+	for _, k := range keys {
+		err = errors.Join(err, pc.Set(k, g.Some(true)))
+	}
+	if cp, ok := pc.(storage.PieceCompletionCheckpointer); ok && len(keys) > 0 {
+		err = errors.Join(err, cp.Checkpoint(keys))
+	}
+	return err
 }
 
 func (p *filePiece) MarkNotComplete() error {
