@@ -342,6 +342,15 @@ func TestEvictedWholePieceUnknown(t *testing.T) {
 	}
 }
 
+// syncNow syncs and records the torrent's pending batch now, instead of
+// waiting for syncEvery.
+func syncNow(st *fileStore) {
+	st.mu.Lock()
+	ft := st.ft
+	st.mu.Unlock()
+	ft.syncPending()
+}
+
 // crashCopy returns the progress database in dir as a crash would leave
 // it: a copy taken while it's still open.
 func crashCopy(t *testing.T, dir string) storage.PieceCompletion {
@@ -944,6 +953,7 @@ func TestCompletionAfterDriveDrop(t *testing.T) {
 	if err := writePiece(t, impl, info); err != nil {
 		t.Fatal(err)
 	}
+	syncNow(st) // recorded, so Completion checks its files
 	os.Rename(dir, filepath.Join(base, "away"))
 	if c := impl.Piece(info.Piece(0)).Completion(); !c.Ok || !c.Complete {
 		t.Errorf("finished piece reported missing after the drive dropped: %+v", c)
