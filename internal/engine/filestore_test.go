@@ -342,14 +342,40 @@ func TestEvictedWholePieceUnknown(t *testing.T) {
 	}
 }
 
-// Finished pieces reach the progress database right away, not only when it's
-// closed: since torrent v1.62.0 the bolt store holds "complete" in memory
-// until a checkpoint, and a crash then lost everything since the start. The
-// database is read from a copy taken while it's still open, as a crash
-// would leave it.
-func TestCompleteSavedWithoutClose(t *testing.T) {
-	const plen, n = 2 * blockSize, 2
-	dir, pcDir := t.TempDir(), t.TempDir()
+// syncNow syncs and records the torrent's pending batch now, instead of
+// waiting for syncEvery.
+func syncNow(st *fileStore) {
+	st.mu.Lock()
+	ft := st.ft
+	st.mu.Unlock()
+	ft.syncPending()
+}
+
+// crashCopy returns the progress database in dir as a crash would leave
+// it: a copy taken while it's still open.
+func crashCopy(t *testing.T, dir string) storage.PieceCompletion {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, ".torrent.bolt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(crashDir, ".torrent.bolt.db"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pc, err := storage.NewBoltPieceCompletion(crashDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	return pc
+}
+
+// batchTorrent opens a torrent of n two-block pieces backed by the bolt
+// progress database in pcDir, with every piece written (buffered).
+func batchTorrent(t *testing.T, ih metainfo.Hash, n int, pcDir string) (*fileStore, storage.TorrentImpl, *metainfo.Info, storage.PieceCompletion) {
+	t.Helper()
+	const plen = 2 * blockSize
 	pc, err := storage.NewBoltPieceCompletion(pcDir)
 	if err != nil {
 		t.Fatal(err)
@@ -362,13 +388,13 @@ func TestCompleteSavedWithoutClose(t *testing.T) {
 		sum := sha1.Sum(pieces[i])
 		sums = append(sums, sum[:]...)
 	}
-	info := &metainfo.Info{Name: "f.bin", PieceLength: plen, Length: plen * n, Pieces: sums}
-	ih := hashN(12)
-	st := newFileStore(dir, pc, "", false)
+	info := &metainfo.Info{Name: "f.bin", PieceLength: plen, Length: int64(plen * n), Pieces: sums}
+	st := newFileStore(t.TempDir(), pc, "", false)
 	impl, err := st.OpenTorrent(t.Context(), info, ih)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { impl.Close() })
 	for i := range pieces {
 		for b := 0; b < plen/blockSize; b++ { // block by block, as the library writes
 			if _, err := impl.Piece(info.Piece(i)).WriteAt(pieces[i][b*blockSize:(b+1)*blockSize], int64(b*blockSize)); err != nil {
@@ -376,28 +402,88 @@ func TestCompleteSavedWithoutClose(t *testing.T) {
 			}
 		}
 	}
+	return st, impl, info, pc
+}
+
+// Finished pieces reach the progress database while it's open, not only
+// when it's closed: since torrent v1.62.0 the bolt store holds "complete"
+// in memory until a checkpoint, and a crash then lost everything since the
+// start. A piece the library completed is saved with its batch (about a
+// second later); one still in memory, by the write-out on close.
+func TestCompleteSavedWithoutClose(t *testing.T) {
+	old := syncEvery
+	syncEvery = time.Millisecond
+	t.Cleanup(func() { syncEvery = old })
+	pcDir := t.TempDir()
+	ih := hashN(12)
+	_, impl, info, _ := batchTorrent(t, ih, 2, pcDir)
 	if err := impl.Piece(info.Piece(0)).MarkComplete(); err != nil { // verified while running
 		t.Fatal(err)
 	}
-	impl.Close() // piece 1 is still buffered: written out on close (the quit path)
-
-	b, err := os.ReadFile(filepath.Join(pcDir, ".torrent.bolt.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	crashDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(crashDir, ".torrent.bolt.db"), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	after, err := storage.NewBoltPieceCompletion(crashDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer after.Close()
-	for i, how := range []string{"MarkComplete", "the write-out on close"} {
-		if c, _ := after.Get(metainfo.PieceKey{InfoHash: ih, Index: i}); !c.Ok || !c.Complete {
-			t.Errorf("piece %d (%s) not in the database before it's closed: %+v", i, how, c)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, _ := crashCopy(t, pcDir).Get(metainfo.PieceKey{InfoHash: ih, Index: 0})
+		if c.Ok && c.Complete {
+			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("piece 0 not saved after its batch: %+v", c)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	impl.Close() // piece 1 is still buffered: written out on close (the quit path)
+	if c, _ := crashCopy(t, pcDir).Get(metainfo.PieceKey{InfoHash: ih, Index: 1}); !c.Ok || !c.Complete {
+		t.Errorf("piece 1 (the write-out on close) not saved: %+v", c)
+	}
+}
+
+// A completed piece waits for its batch: it already counts as complete
+// (Completion), several pieces share one batch, and close syncs and records
+// the last batch. A piece that fails a check before its batch isn't
+// recorded.
+func TestBatchedSync(t *testing.T) {
+	old := syncEvery
+	syncEvery = time.Hour // only close syncs here
+	t.Cleanup(func() { syncEvery = old })
+	pcDir := t.TempDir()
+	ih := hashN(13)
+	_, impl, info, pc := batchTorrent(t, ih, 3, pcDir)
+	for i := 0; i < 3; i++ {
+		if err := impl.Piece(info.Piece(i)).MarkComplete(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	impl.Piece(info.Piece(2)).MarkNotComplete() // a later check failed
+	for i, want := range []bool{true, true, false} {
+		if c := impl.Piece(info.Piece(i)).Completion(); c.Complete != want {
+			t.Errorf("piece %d before its batch: %+v, want complete %v", i, c, want)
+		}
+	}
+	if c, _ := crashCopy(t, pcDir).Get(metainfo.PieceKey{InfoHash: ih, Index: 0}); c.Ok && c.Complete {
+		t.Error("recorded before its batch was synced")
+	}
+	impl.Close()
+	for i, want := range []bool{true, true, false} {
+		if c, _ := pc.Get(metainfo.PieceKey{InfoHash: ih, Index: i}); (c.Ok && c.Complete) != want {
+			t.Errorf("piece %d after close: %+v, want complete %v", i, c, want)
+		}
+	}
+}
+
+// A removed torrent's batch leaves no "complete" records.
+func TestBatchedSyncRemoved(t *testing.T) {
+	old := syncEvery
+	syncEvery = time.Hour
+	t.Cleanup(func() { syncEvery = old })
+	ih := hashN(14)
+	st, impl, info, pc := batchTorrent(t, ih, 1, t.TempDir())
+	if err := impl.Piece(info.Piece(0)).MarkComplete(); err != nil {
+		t.Fatal(err)
+	}
+	st.dropping()
+	impl.Close()
+	if c, _ := pc.Get(metainfo.PieceKey{InfoHash: ih, Index: 0}); c.Ok && c.Complete {
+		t.Errorf("removed torrent's piece recorded: %+v", c)
 	}
 }
 
@@ -867,6 +953,7 @@ func TestCompletionAfterDriveDrop(t *testing.T) {
 	if err := writePiece(t, impl, info); err != nil {
 		t.Fatal(err)
 	}
+	syncNow(st) // recorded, so Completion checks its files
 	os.Rename(dir, filepath.Join(base, "away"))
 	if c := impl.Piece(info.Piece(0)).Completion(); !c.Ok || !c.Complete {
 		t.Errorf("finished piece reported missing after the drive dropped: %+v", c)
