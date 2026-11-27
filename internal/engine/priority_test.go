@@ -112,3 +112,29 @@ func TestApplyPriorities(t *testing.T) {
 		t.Errorf("after turning it off: a.mkv ends %v %v, want Normal", piece(0), piece(4))
 	}
 }
+
+// "Checking" after a restart: only unknown pieces in the hash queue count,
+// not the normal hashing of freshly downloaded pieces (known incomplete),
+// and not an unknown piece nobody is checking.
+func TestCheckingUnknown(t *testing.T) {
+	run := func(ok, queued bool) torrent.PieceStateRun {
+		var r torrent.PieceStateRun
+		r.Length = 1
+		r.Ok, r.QueuedForHash = ok, queued
+		return r
+	}
+	for _, c := range []struct {
+		name string
+		runs []torrent.PieceStateRun
+		want bool
+	}{
+		{"start-up check", []torrent.PieceStateRun{run(true, false), run(false, true)}, true},
+		{"downloading", []torrent.PieceStateRun{run(true, true), run(true, false)}, false},
+		{"unknown, not queued", []torrent.PieceStateRun{run(false, false)}, false},
+		{"none", nil, false},
+	} {
+		if got := checkingUnknown(c.runs); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}

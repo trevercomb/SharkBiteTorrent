@@ -1243,6 +1243,12 @@ func (e *Engine) List() []Status {
 			row.State = "needs-torrent-file"
 		case t.Info() == nil:
 			row.State = "metadata"
+		case checkingUnknown(t.PieceStateRuns()):
+			// After a restart, pieces the storage wrote out before they were
+			// recorded (see WriteAt's eviction) are checked from the drive
+			// before they count, so progress looks far lower for a few
+			// seconds (a kill at 50% showed 18%, then 50% again).
+			row.State = "checking"
 		case row.Done >= row.Size && piecesBeingChecked(t):
 			// Every byte is there, but some pieces are still queued for
 			// their hash check (after a restart, many are): not finished
@@ -1557,6 +1563,20 @@ func (e *Engine) VerifyAuto(ctx context.Context, hash, reason string) (*VerifyRe
 
 // piecesBeingChecked reports whether any of t's pieces is queued for, or in,
 // its hash check.
+// checkingUnknown reports whether pieces whose completion isn't known yet
+// are being checked. Only the check at start (or after a torrent is added)
+// has such pieces: while downloading, a piece is known incomplete until its
+// check passes. An unknown piece that isn't queued doesn't count, so the
+// state can't stick.
+func checkingUnknown(runs []torrent.PieceStateRun) bool {
+	for _, r := range runs {
+		if !r.Ok && (r.Hashing || r.QueuedForHash || r.Marking) {
+			return true
+		}
+	}
+	return false
+}
+
 func piecesBeingChecked(t *torrent.Torrent) bool {
 	for _, r := range t.PieceStateRuns() {
 		if r.Checking || r.Hashing || r.QueuedForHash || r.Marking {
