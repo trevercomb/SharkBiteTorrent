@@ -487,6 +487,110 @@ func TestBatchedSyncRemoved(t *testing.T) {
 	}
 }
 
+// The backlog follows the drive: about bufferSeconds of its speed, at least
+// minBuffered or 4 pieces, at most maxBuffered, and maxBuffered until it's
+// been measured.
+func TestBufferCap(t *testing.T) {
+	const mb = 1 << 20
+	for _, c := range []struct {
+		drain float64
+		plen  int64
+		want  int64
+	}{
+		{0, 256 << 10, maxBuffered},       // not measured yet
+		{5 * mb, 256 << 10, minBuffered},  // a Mac's NAS: 25 MB, at least 32
+		{20 * mb, 256 << 10, 100 * mb},    // 5 s of it
+		{1 << 30, 256 << 10, maxBuffered}, // a fast disk
+		{5 * mb, 16 * mb, 4 * 16 * mb},    // big pieces: at least 4 of them
+		{1 << 30, 128 * mb, maxBuffered},  // never over the cap
+	} {
+		ft := &fileTorrent{info: &metainfo.Info{PieceLength: c.plen}, drain: c.drain}
+		if got := ft.bufferCap(); got != c.want {
+			t.Errorf("drain %.0f, pieces %d: cap %d, want %d", c.drain, c.plen, got, c.want)
+		}
+	}
+}
+
+// The drive's speed is estimated from time spent writing and syncing, once
+// there's enough of it, and averaged.
+func TestUpdateDrain(t *testing.T) {
+	ft := &fileTorrent{}
+	ft.noteIO(512<<10, 100*time.Millisecond)
+	ft.updateDrain()
+	if ft.drain != 0 {
+		t.Fatalf("estimated from too little: %v", ft.drain)
+	}
+	ft.noteIO(512<<10, 0)
+	ft.noteIO(0, 100*time.Millisecond) // a sync: time, no bytes
+	ft.updateDrain()
+	if want := float64(1<<20) / 0.2; ft.drain != want {
+		t.Fatalf("first estimate %v, want %v", ft.drain, want)
+	}
+	ft.noteIO(1<<20, time.Second) // slower now
+	ft.updateDrain()
+	if ft.drain >= float64(1<<20)/0.2 || ft.drain <= float64(1<<20) {
+		t.Errorf("averaged estimate %v, want between the two", ft.drain)
+	}
+}
+
+// On a slow drive the memory backlog stays at its cap: what doesn't fit is
+// written out early, whole pieces recorded as unknown (checked after a crash).
+func TestBufferFollowsDrive(t *testing.T) {
+	const plen, n = 2 * blockSize, 10
+	oldMin := minBuffered
+	minBuffered = 2 * plen
+	t.Cleanup(func() { minBuffered = oldMin })
+	dir := t.TempDir()
+	pc, err := storage.NewBoltPieceCompletion(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	var sums []byte
+	pieces := make([][]byte, n)
+	for i := range pieces {
+		pieces[i] = bytes.Repeat([]byte{byte('a' + i)}, plen)
+		sum := sha1.Sum(pieces[i])
+		sums = append(sums, sum[:]...)
+	}
+	info := &metainfo.Info{Name: "f.bin", PieceLength: plen, Length: plen * n, Pieces: sums}
+	ih := hashN(12)
+	st := newFileStore(dir, pc, "", false)
+	impl, err := st.OpenTorrent(t.Context(), info, ih)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { impl.Close() })
+	ft := st.ft
+	ft.mu.Lock()
+	ft.drain = 1 // a very slow drive: the cap is its floor, 4 pieces
+	limit := ft.bufferCap()
+	ft.mu.Unlock()
+	if limit != 4*plen {
+		t.Fatalf("cap %d, want %d", limit, 4*plen)
+	}
+	for i := 0; i < n; i++ {
+		for b := 0; b < 2; b++ { // block by block, as the library writes
+			impl.Piece(info.Piece(i)).WriteAt(pieces[i][b*blockSize:(b+1)*blockSize], int64(b*blockSize))
+		}
+		ft.mu.Lock()
+		buffered := ft.buffered
+		ft.mu.Unlock()
+		if buffered > limit {
+			t.Fatalf("after piece %d: %d buffered, over the cap %d", i, buffered, limit)
+		}
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "f.bin"))
+	for i := 0; i < n-4; i++ { // the oldest went to disk, recorded as unknown
+		if c, _ := pc.Get(metainfo.PieceKey{InfoHash: ih, Index: i}); c.Ok {
+			t.Errorf("piece %d written early but recorded %+v, want unknown", i, c)
+		}
+		if len(b) < (i+1)*plen || !bytes.Equal(b[i*plen:(i+1)*plen], pieces[i]) {
+			t.Errorf("piece %d isn't on the drive", i)
+		}
+	}
+}
+
 // openStore opens info in dir with ownership records in owned, closing it
 // when the test ends.
 func openStore(t *testing.T, dir, owned string, info *metainfo.Info, ih metainfo.Hash) (*fileStore, storage.TorrentImpl) {

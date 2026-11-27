@@ -379,6 +379,57 @@ type fileTorrent struct {
 	pending, syncing map[int]bool
 	syncTimer        *time.Timer
 	syncMu           sync.Mutex
+	// How fast the drive takes data (see bufferCap): bytes written, and the
+	// time spent writing and syncing them, since the last estimate; drain is
+	// the estimate in bytes a second (0 until there's one).
+	ioBytes int64
+	ioTime  time.Duration
+	drain   float64
+}
+
+// The memory backlog follows the drive: about bufferSeconds of what it takes
+// in, between minBuffered (or 4 pieces) and maxBuffered. A fixed 256 MB was a
+// minute of writing to a Mac's NAS (~5 MB/s against a 20 MB/s download), all
+// of it lost when the app was killed (50% back to 16%); on a fast disk it
+// stays at maxBuffered. Whatever doesn't fit is written out early (see
+// WriteAt), which keeps the download at the drive's pace, and a whole piece
+// written that way is checked from the drive after a crash, not lost.
+// (Variables for tests.)
+var (
+	bufferSeconds       = 5.0
+	minBuffered   int64 = 32 << 20
+)
+
+// bufferCap is the backlog allowed now. Call with t.mu held.
+func (t *fileTorrent) bufferCap() int64 {
+	if t.drain <= 0 {
+		return maxBuffered // not measured yet
+	}
+	return min(max(int64(t.drain*bufferSeconds), minBuffered, 4*t.info.PieceLength), maxBuffered)
+}
+
+// noteIO adds a write (n bytes) or a sync (n = 0) and the time it took.
+func (t *fileTorrent) noteIO(n int64, d time.Duration) {
+	t.mu.Lock()
+	t.ioBytes += n
+	t.ioTime += d
+	t.mu.Unlock()
+}
+
+// updateDrain turns what was written since the last estimate into a new one,
+// once there's enough of it (a moving average, so one slow sync doesn't
+// shrink the backlog to nothing). Call with t.mu held.
+func (t *fileTorrent) updateDrain() {
+	if t.ioBytes < 1<<20 || t.ioTime < 200*time.Millisecond {
+		return
+	}
+	sample := float64(t.ioBytes) / t.ioTime.Seconds()
+	if t.drain == 0 {
+		t.drain = sample
+	} else {
+		t.drain = 0.7*t.drain + 0.3*sample
+	}
+	t.ioBytes, t.ioTime = 0, 0
 }
 
 // syncEvery is how long a finished piece waits for its batch: the files
@@ -934,8 +985,11 @@ func (p *filePiece) WriteAt(b []byte, off int64) (int, error) {
 
 	p.t.mu.Lock()
 	buf := p.t.bufs[idx]
-	var evict *pieceBuf
-	var evictIdx int
+	type evicted struct {
+		idx int
+		buf *pieceBuf
+	}
+	var evict []evicted
 	if buf == nil {
 		p.t.seq++
 		buf = &pieceBuf{
@@ -945,19 +999,24 @@ func (p *filePiece) WriteAt(b []byte, off int64) (int, error) {
 		}
 		p.t.bufs[idx] = buf
 		p.t.buffered += plen
-		if p.t.buffered > maxBuffered {
-			evictIdx, evict = p.t.oldestOtherThan(idx)
-			if evict != nil {
-				delete(p.t.bufs, evictIdx)
-				p.t.buffered -= int64(len(evict.data))
+		// The cap can drop below what's buffered (a slow drive measured), so
+		// as many as needed go.
+		for limit := p.t.bufferCap(); p.t.buffered > limit; {
+			ei, eb := p.t.oldestOtherThan(idx)
+			if eb == nil {
+				break
 			}
+			delete(p.t.bufs, ei)
+			p.t.buffered -= int64(len(eb.data))
+			evict = append(evict, evicted{ei, eb})
 		}
 	}
 	copy(buf.data[off:], b)
 	buf.have[off/blockSize] = true
 	p.t.mu.Unlock()
 
-	if evict != nil {
+	for _, e := range evict {
+		evictIdx, evict := e.idx, e.buf
 		// Memory cap reached: write the oldest buffer out now. A piece that's
 		// whole in it (downloaded, waiting for the library's check and
 		// MarkComplete) is first recorded as unknown, so if the app stops
@@ -995,6 +1054,8 @@ func (p *filePiece) flushAt(idx int, buf *pieceBuf) error {
 		piece = &filePiece{t: p.t, p: p.t.info.Piece(idx)}
 	}
 	var errs []error
+	start, written := time.Now(), int64(0)
+	defer func() { p.t.noteIO(written, time.Since(start)) }()
 	for i := 0; i < len(buf.have); {
 		if !buf.have[i] {
 			i++
@@ -1006,7 +1067,9 @@ func (p *filePiece) flushAt(idx int, buf *pieceBuf) error {
 		}
 		lo := int64(i) * blockSize
 		hi := min(int64(j)*blockSize, int64(len(buf.data)))
-		if _, err := piece.diskIO(buf.data[lo:hi], lo, true, (*os.File).WriteAt); err != nil {
+		n, err := piece.diskIO(buf.data[lo:hi], lo, true, (*os.File).WriteAt)
+		written += int64(n)
+		if err != nil {
 			errs = append(errs, err)
 		}
 		i = j
@@ -1063,7 +1126,9 @@ func (t *fileTorrent) syncPending() {
 			}
 			inFiles[idx] = append(inFiles[idx], i)
 			if _, done := synced[i]; !done {
+				start := time.Now()
 				synced[i] = t.syncFile(i) == nil
+				t.noteIO(0, time.Since(start))
 			}
 		}
 	}
@@ -1074,6 +1139,7 @@ func (t *fileTorrent) syncPending() {
 	var done []metainfo.PieceKey
 	var bad []int
 	t.mu.Lock()
+	t.updateDrain() // this batch's writes and syncs
 pieces:
 	for _, idx := range pieces {
 		if !t.syncing[idx] {
