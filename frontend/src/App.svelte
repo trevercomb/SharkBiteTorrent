@@ -404,6 +404,9 @@
     if (startingNow.has(t.hash)) return 'Starting…'
     if (t.confirm && t.state === 'paused') return 'Waiting for Start'
     if (t.seedLimit && t.state === 'paused') return 'Seeding limit reached'
+    // After a restart: pieces already on the drive are checked before they
+    // count, so the progress bar catches up within seconds.
+    if (t.state === 'checking' && t.done < t.size) return 'Checking saved data…'
     return stateLabel[t.state] ?? t.state
   }
 
