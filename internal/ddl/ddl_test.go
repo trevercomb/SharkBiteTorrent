@@ -87,6 +87,26 @@ func waitState(t *testing.T, m *Manager, id string, want State) Status {
 	return Status{}
 }
 
+// waitHave waits until download id has some data (a fixed sleep wasn't
+// enough on a slow CI runner: the link then expired before anything had
+// arrived).
+func waitHave(t *testing.T, m *Manager, id string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, s := range m.Statuses() {
+			if s.ID == id && s.Have > 0 {
+				return
+			}
+			if s.ID == id && s.State == Failed {
+				t.Fatalf("download failed: %s", s.Error)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("download %s never got any data: %+v", id, m.Statuses())
+}
+
 func checkFile(t *testing.T, path string, want []byte) {
 	t.Helper()
 	got, err := os.ReadFile(path)
@@ -190,7 +210,7 @@ func TestPauseResume(t *testing.T) {
 	dir := t.TempDir()
 	m := newManager(nil)
 	m.Add(Spec{ID: "a", URL: srv.URL + "/x", Dir: dir})
-	time.Sleep(100 * time.Millisecond)
+	waitHave(t, m, "a") // paused mid-download
 	m.Pause("a")
 	if s := m.Statuses()[0]; s.State != Paused || !m.Specs()[0].Paused {
 		t.Fatalf("after Pause: %+v", s)
@@ -250,7 +270,7 @@ func TestExpiredLink(t *testing.T) {
 	dir := t.TempDir()
 	m := newManager(nil)
 	m.Add(Spec{ID: "a", URL: srv.URL + "/old", Page: "https://host.example/f/1", Dir: dir, Name: "e.bin"})
-	time.Sleep(150 * time.Millisecond)
+	waitHave(t, m, "a") // then the link expires mid-download
 	oldWorks.Store(false)
 	st := waitState(t, m, "a", NeedsLink)
 	if st.Have == 0 || !m.Specs()[0].NeedLink {

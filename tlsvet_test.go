@@ -94,6 +94,12 @@ func TestTLSVetter(t *testing.T) {
 		mu.Lock()
 		dialed = append(dialed, addr)
 		mu.Unlock()
+		// localhost is 127.0.0.1 here, as a resolver would answer, without
+		// asking the system's DNS: on a CI runner that lookup sometimes timed
+		// out. (The check still sees the name, and the address it reached.)
+		if h, p, err := net.SplitHostPort(addr); err == nil && h == "localhost" {
+			addr = net.JoinHostPort("127.0.0.1", p)
+		}
 		return d.DialContext(ctx, network, addr)
 	}}
 	since := func() func() []string {
